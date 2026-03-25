@@ -1104,11 +1104,335 @@ def launch_campaign():
         logger.error(f"Error launching campaign: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/miizy/api/campaign/launch-background', methods=['POST'])
+def miizy_launch_background_campaign():
+    """Lance une campagne Miizy en arrière-plan — non bloquant, indépendant du navigateur."""
+    try:
+        data = request.json or {}
+        message_tpl = data.get('message', '').strip()
+        if not message_tpl:
+            return jsonify({"success": False, "error": "Message vide"}), 400
+
+        hour = datetime.now().hour
+        if hour < 8 or hour >= 20:
+            return jsonify({
+                "success": False,
+                "error": f"Envoi autorisé entre 8h et 20h (heure actuelle : {hour}h)"
+            }), 400
+
+        input_leads = data.get('leads', [])
+        if not input_leads:
+            input_leads = miizy_leads_manager.list_leads()
+
+        valid_leads = [l for l in input_leads if l.get('phone')]
+        if not valid_leads:
+            return jsonify({"success": False, "error": "Aucun lead avec numéro valide"}), 400
+
+        job_id = f"miizy_{int(datetime.now().timestamp())}"
+        progress_key = f"{_MIIZY_CAMPAIGN_PROGRESS_PREFIX}{job_id}"
+
+        job_data = {
+            "job_id": job_id,
+            "total": len(valid_leads),
+            "sent": 0,
+            "errors": 0,
+            "current_index": 0,
+            "status": "running",
+            "started_at": datetime.now().isoformat(),
+        }
+        redis_client.client.setex(progress_key, 86400, json.dumps(job_data))
+
+        t = threading.Thread(
+            target=_miizy_campaign_worker,
+            args=(job_id, message_tpl, valid_leads),
+            daemon=True,
+            name=f"miizy_campaign_{job_id}",
+        )
+        t.start()
+
+        logger.info(f"[Miizy][Campaign] Job {job_id} démarré — {len(valid_leads)} leads")
+        return jsonify({"success": True, "job_id": job_id, "total": len(valid_leads)})
+
+    except Exception as e:
+        logger.error(f"[Miizy][Campaign] Erreur lancement: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/miizy/api/campaign/progress/<job_id>', methods=['GET'])
+def miizy_campaign_progress(job_id):
+    """Retourne la progression en temps réel d'une campagne background."""
+    try:
+        raw = redis_client.client.get(f"{_MIIZY_CAMPAIGN_PROGRESS_PREFIX}{job_id}")
+        if not raw:
+            return jsonify({"success": False, "error": "Job introuvable ou expiré"}), 404
+        return jsonify({"success": True, **json.loads(raw)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/miizy/api/campaign/cancel/<job_id>', methods=['POST'])
+def miizy_campaign_cancel(job_id):
+    """Annule une campagne background en cours."""
+    try:
+        key = f"{_MIIZY_CAMPAIGN_PROGRESS_PREFIX}{job_id}"
+        raw = redis_client.client.get(key)
+        if not raw:
+            return jsonify({"success": False, "error": "Job introuvable"}), 404
+        jd = json.loads(raw)
+        jd["status"] = "cancelled"
+        redis_client.client.setex(key, 86400, json.dumps(jd))
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/miizy/api/sequences/run', methods=['POST'])
+def miizy_sequences_run_now():
+    """Déclenche manuellement un cycle de séquences (admin uniquement)."""
+    if not session.get('user_email'):
+        return jsonify({'error': 'Non authentifié'}), 401
+    if session.get('user_role') != 'admin':
+        return jsonify({'error': 'Accès refusé'}), 403
+    try:
+        threading.Thread(target=_miizy_run_sequences, daemon=True).start()
+        return jsonify({"success": True, "message": "Cycle de séquences lancé en arrière-plan"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 MIIZY_TEMPLATE_DEFAULTS = {
     "ouverture": "Bonjour {Prenom},\n\nVous travaillez sur du neuf, ou uniquement de l'ancien ?",
     "relance_24h": "Bonjour {Prenom}, je voulais juste prendre de vos nouvelles — avez-vous eu le temps de regarder mon message précédent ?",
     "relance_72h": "Bonjour {Prenom}, je ne veux pas vous déranger davantage — si jamais vous souhaitez en savoir plus sur Miizy, je reste disponible quand vous voulez. Bonne journée !",
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MOTEUR DE SÉQUENCES AUTOMATIQUES MIIZY (Phase 1)
+# Cron côté serveur : check toutes les 30 min
+# envoye +24h → relance_24h | relance_24h +72h → relance_72h | relance_72h +7j → cloture
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _miizy_load_templates_for_sequences() -> dict:
+    """Charge les templates Miizy (custom ou défauts)."""
+    try:
+        custom = {}
+        if os.path.exists('miizy_templates.json'):
+            custom = json.load(open('miizy_templates.json', 'r', encoding='utf-8'))
+        result = {}
+        for key, default_text in MIIZY_TEMPLATE_DEFAULTS.items():
+            result[key] = custom.get(key, default_text)
+        return result
+    except Exception:
+        return dict(MIIZY_TEMPLATE_DEFAULTS)
+
+
+def _miizy_run_sequences():
+    """Exécute les séquences automatiques Miizy — appelé toutes les 30 min."""
+    import time as _t
+    now = datetime.now()
+    templates = _miizy_load_templates_for_sequences()
+    tpl_24h = templates.get("relance_24h", MIIZY_TEMPLATE_DEFAULTS["relance_24h"])
+    tpl_72h = templates.get("relance_72h", MIIZY_TEMPLATE_DEFAULTS["relance_72h"])
+
+    try:
+        all_leads = miizy_leads_manager.list_leads()
+    except Exception as e:
+        logger.warning(f"[Miizy][Seq] Impossible de charger les leads: {e}")
+        return
+
+    sent_count = cloture_count = 0
+
+    for lead in all_leads:
+        phone = lead.get("phone", "")
+        state = lead.get("state", "")
+        if not phone or not state:
+            continue
+
+        # Ignorer les leads en pause commerciale, déjà clôturés, non WhatsApp
+        if state in ("pause", "cloture", "non_whatsapp", "rdv_confirme", "clos"):
+            continue
+
+        try:
+            if state == "envoye":
+                # J0 + 24h sans réponse → relance_24h
+                ref_str = lead.get("sent_at") or lead.get("created_at", "")
+                if not ref_str:
+                    continue
+                ref_dt = datetime.fromisoformat(ref_str)
+                if (now - ref_dt).total_seconds() >= 24 * 3600:
+                    msg = _render_message(tpl_24h, lead)
+                    result = miizy_evolution_api.send_text(phone, msg)
+                    if result.get("success"):
+                        miizy_leads_manager.update_lead(phone, {
+                            "state": "relance_24h",
+                            "etat": "relance_24h",
+                            "relance_24h_sent_at": now.isoformat(),
+                        })
+                        logger.info(f"[Miizy][Seq] Relance 24h envoyée → {phone}")
+                        sent_count += 1
+                        _t.sleep(2)  # petite pause anti-spam
+
+            elif state == "relance_24h":
+                # relance_24h + 72h sans réponse → relance_72h
+                ref_str = lead.get("relance_24h_sent_at", "")
+                if not ref_str:
+                    # Fallback sur sent_at si relance_24h_sent_at absent
+                    ref_str = lead.get("sent_at") or lead.get("created_at", "")
+                    if not ref_str:
+                        continue
+                ref_dt = datetime.fromisoformat(ref_str)
+                if (now - ref_dt).total_seconds() >= 72 * 3600:
+                    msg = _render_message(tpl_72h, lead)
+                    result = miizy_evolution_api.send_text(phone, msg)
+                    if result.get("success"):
+                        miizy_leads_manager.update_lead(phone, {
+                            "state": "relance_72h",
+                            "etat": "relance_72h",
+                            "relance_72h_sent_at": now.isoformat(),
+                        })
+                        logger.info(f"[Miizy][Seq] Relance 72h envoyée → {phone}")
+                        sent_count += 1
+                        _t.sleep(2)
+
+            elif state == "relance_72h":
+                # relance_72h + 7j sans réponse → clôture automatique
+                ref_str = lead.get("relance_72h_sent_at", "")
+                if not ref_str:
+                    ref_str = lead.get("sent_at") or lead.get("created_at", "")
+                    if not ref_str:
+                        continue
+                ref_dt = datetime.fromisoformat(ref_str)
+                if (now - ref_dt).total_seconds() >= 7 * 24 * 3600:
+                    miizy_leads_manager.update_lead(phone, {
+                        "state": "cloture",
+                        "etat": "cloture",
+                        "cloture_tag": "Séquence terminée — aucune réponse",
+                        "cloture_at": now.isoformat(),
+                    })
+                    logger.info(f"[Miizy][Seq] Clôture auto → {phone}")
+                    cloture_count += 1
+
+        except Exception as e:
+            logger.warning(f"[Miizy][Seq] Erreur pour {phone}: {e}")
+
+    if sent_count or cloture_count:
+        logger.info(f"[Miizy][Seq] Cycle terminé — {sent_count} envoi(s), {cloture_count} clôture(s)")
+
+
+def _miizy_sequence_engine_start():
+    """Démarre le moteur de séquences Miizy en arrière-plan (thread daemon)."""
+    import time as _t
+
+    def _loop():
+        _t.sleep(60)  # Attendre 60s au démarrage que tout soit initialisé
+        while True:
+            try:
+                _miizy_run_sequences()
+            except Exception as e:
+                logger.error(f"[Miizy][Seq] Erreur inattendue: {e}")
+            _t.sleep(30 * 60)  # Toutes les 30 minutes
+
+    t = threading.Thread(target=_loop, daemon=True, name="miizy_sequence_engine")
+    t.start()
+    logger.info("[Miizy] Moteur de séquences démarré (interval: 30 min)")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CAMPAGNE BACKGROUND MIIZY (Phase 3)
+# File Redis + worker indépendant du navigateur
+# ══════════════════════════════════════════════════════════════════════════════
+
+_MIIZY_CAMPAIGN_PROGRESS_PREFIX = "miizy:campaign:progress:"
+
+
+def _miizy_campaign_worker(job_id: str, message_tpl: str, leads: list):
+    """Worker campagne Miizy — tourne en arrière-plan, indépendant du navigateur."""
+    import random, time as _t
+    progress_key = f"{_MIIZY_CAMPAIGN_PROGRESS_PREFIX}{job_id}"
+
+    sent = errors = 0
+
+    for i, lead in enumerate(leads):
+        # Lire le statut (annulation possible depuis le dashboard)
+        try:
+            raw = redis_client.client.get(progress_key)
+            if not raw:
+                break
+            job_data = json.loads(raw)
+            if job_data.get("status") == "cancelled":
+                logger.info(f"[Miizy][Campaign] Job {job_id} annulé à {i}/{len(leads)}")
+                break
+        except Exception:
+            pass
+
+        # Vérifier plage horaire (8h-20h) — pause si nuit
+        hour = datetime.now().hour
+        if hour < 8 or hour >= 20:
+            logger.info(f"[Miizy][Campaign] Hors plage — job {job_id} suspendu (nuit)")
+            try:
+                raw = redis_client.client.get(progress_key)
+                if raw:
+                    jd = json.loads(raw)
+                    jd.update({"status": "paused_night", "sent": sent, "errors": errors, "current_index": i})
+                    redis_client.client.setex(progress_key, 86400, json.dumps(jd))
+            except Exception:
+                pass
+            break
+
+        phone = lead.get("phone", "")
+        if not phone:
+            continue
+
+        msg = _render_message(message_tpl, lead)
+        result = miizy_evolution_api.send_text(phone, msg)
+
+        if result.get("success"):
+            try:
+                miizy_leads_manager.update_lead(phone, {
+                    "sent_at": datetime.now().isoformat(),
+                    "state": "envoye",
+                    "etat": "envoye",
+                })
+            except Exception:
+                pass
+            sent += 1
+        else:
+            try:
+                miizy_leads_manager.update_lead(phone, {"state": "non_whatsapp", "etat": "non_whatsapp"})
+            except Exception:
+                pass
+            errors += 1
+
+        # Mettre à jour la progression
+        try:
+            raw = redis_client.client.get(progress_key)
+            if raw:
+                jd = json.loads(raw)
+                jd.update({"sent": sent, "errors": errors, "current_index": i + 1})
+                redis_client.client.setex(progress_key, 86400, json.dumps(jd))
+        except Exception:
+            pass
+
+        # Pause anti-ban : ~13 min entre messages (configurable — 5/heure)
+        if i < len(leads) - 1:
+            if (i + 1) % 5 == 0:
+                pause = random.uniform(75, 90)   # pause plus longue tous les 5
+            else:
+                pause = random.uniform(10, 20)   # pause courte intra-burst
+            _t.sleep(pause)
+
+    # Marquer terminé
+    try:
+        raw = redis_client.client.get(progress_key)
+        if raw:
+            jd = json.loads(raw)
+            if jd.get("status") not in ("cancelled", "paused_night"):
+                jd.update({"status": "done", "sent": sent, "errors": errors})
+                redis_client.client.setex(progress_key, 86400, json.dumps(jd))
+    except Exception:
+        pass
+
+    logger.info(f"[Miizy][Campaign] Job {job_id} terminé — {sent} envoyés, {errors} erreurs")
 
 def _templates_file():
     """Retourne le fichier de templates selon l'agent actif."""
@@ -1401,11 +1725,16 @@ def get_conversation_messages(jid):
 
         evo_messages = []
         try:
-            payload = {'where': {'key': {'remoteJid': jid}}}
-            r = req.post(f'{base}/chat/findMessages/{instance}', headers=headers, json=payload, timeout=10)
-            if r.status_code < 400:
-                data = r.json()
-                records = data.get('messages', {}).get('records', data if isinstance(data, list) else [])
+            # Phase 4 : essayer plusieurs formats JID (@s.whatsapp.net et @lid)
+            _jid_candidates = [jid]
+            if '@lid' in jid:
+                # Fallback vers @s.whatsapp.net si on a un @lid
+                _jid_candidates.append(f"{phone_clean}@s.whatsapp.net")
+            elif '@s.whatsapp.net' not in jid and '@c.us' not in jid:
+                _jid_candidates = [f"{phone_clean}@s.whatsapp.net", f"{phone_clean}@c.us"]
+
+            def _parse_evo_records(records):
+                parsed = []
                 for msg in records:
                     msg_body = msg.get('message', {}) or {}
                     text = (msg_body.get('conversation')
@@ -1420,7 +1749,7 @@ def get_conversation_messages(jid):
                     if not text and msg_type in ('imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage'):
                         text = f'[{msg_type.replace("Message", "")}]'
                     from_me = msg.get('key', {}).get('fromMe', False)
-                    evo_messages.append({
+                    parsed.append({
                         'id': msg.get('key', {}).get('id', msg.get('id')),
                         'fromMe': from_me,
                         'text': text,
@@ -1428,6 +1757,21 @@ def get_conversation_messages(jid):
                         'status': msg.get('MessageUpdate', [{}])[-1].get('status', '') if msg.get('MessageUpdate') else '',
                         'type': msg_type,
                     })
+                return parsed
+
+            for _jid_try in _jid_candidates:
+                try:
+                    payload = {'where': {'key': {'remoteJid': _jid_try}}}
+                    r = req.post(f'{base}/chat/findMessages/{instance}', headers=headers, json=payload, timeout=10)
+                    if r.status_code < 400:
+                        data = r.json()
+                        records = data.get('messages', {}).get('records', data if isinstance(data, list) else [])
+                        if records:
+                            evo_messages = _parse_evo_records(records)
+                            break  # Arrêter dès qu'on a des résultats
+                except Exception as _e:
+                    logger.warning(f"findMessages error for {_jid_try}: {_e}")
+                    continue
         except Exception as e:
             logger.warning(f"Evolution API messages error: {e}")
 
@@ -3076,6 +3420,11 @@ def miizy_training_reset():
         logger.error(f"[miizy_training/reset] {e}")
         return jsonify({'error': str(e)}), 500
 
+
+# ==================== DÉMARRAGE DES WORKERS ====================
+
+# Moteur de séquences automatiques Miizy (Phase 1)
+_miizy_sequence_engine_start()
 
 # ==================== MAIN ====================
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent WhatsApp Miizy — Workflow exact avec fallback LLM (classification uniquement)."""
+"""Agent WhatsApp Miizy — Workflow exact + gestion objections style Adam."""
 
 import json
 import logging
@@ -138,6 +138,46 @@ def detect_yes_no(txt: str) -> Optional[str]:
     return None
 
 
+def _detect_objection(txt: str) -> Optional[str]:
+    """Détecte le type d'objection dans un message du prospect."""
+    t = _normalize(txt)
+
+    # Pas intéressé
+    if re.search(
+        r"\b(pas interesse|pas interess|non interesse|pas pour moi|"
+        r"ca m interesse pas|ca ne m interesse pas|ne m interesse|"
+        r"m interesse pas|sans interet|pas concerne|pas concern)\b", t
+    ):
+        return "pas_interesse"
+
+    # Mauvais moment / pas disponible
+    if re.search(
+        r"\b(pas le bon moment|pas maintenant|plus tard|dans quelques|"
+        r"en ce moment|mauvais moment|pas dispo en ce moment|"
+        r"trop occupe|trop busy|chargé en ce|charge en ce|revenez|rappel"
+        r"ez.moi|rappeler plus tard|pas le moment)\b", t
+    ):
+        return "mauvais_moment"
+
+    # Demande de mail / email
+    if re.search(
+        r"\b(envoyez|envoyer|par mail|par email|par e.mail|un mail|un email|"
+        r"ecrivez|ecrivez.moi|contactez.moi par|envoi.moi|send me|par message|"
+        r"laissez.moi|laissez un)\b", t
+    ) and re.search(r"\b(mail|email|e.mail|message|mp|dm)\b", t):
+        return "demande_mail"
+
+    # Déjà suivi / accompagné
+    if re.search(
+        r"\b(deja suivi|deja accompagne|j ai deja|j'ai deja|deja un|deja une|"
+        r"je travaille deja avec|j ai quelqu|on a deja|deja equipe|"
+        r"on est deja|je suis deja avec|j utilise deja)\b", t
+    ):
+        return "deja_suivi"
+
+    return None
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CLASSIFICATION LLM (fallback — uniquement OUI/NON/UNCLEAR)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -232,6 +272,126 @@ RÈGLES :
         logger.warning(f"[Miizy LLM] Exception: {e}")
 
     return {"intention": "UNCLEAR", "clarification": None}
+
+
+def _generate_adam_response(
+    user_msg: str,
+    step: str,
+    session: "MiizySession",
+    objection_type: str,
+) -> "Tuple[str, str]":
+    """
+    Génère une réponse humaine style Adam (Miizy) face à une objection.
+    Persona : L'Audace Empathique + Le Pari + Transparence Radicale.
+    Règle tempo : ne jamais fusionner proposition de visio ET proposition de pari.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        logger.warning("[Miizy][Adam] Pas d'ANTHROPIC_API_KEY — silence")
+        return "", ""
+
+    history = session.get("history", [])
+    hist_str = "\n".join(
+        f"{'Prospect' if h['role'] == 'user' else 'Adam'}: {h['content'][:200]}"
+        for h in history[-8:]
+    ) or "(premier message)"
+    prenom = session.prenom
+
+    _OBJECTION_GUIDANCE = {
+        "pas_interesse": (
+            "Reformule UN bénéfice concret de Miizy (ex : 40k lots neufs + version gratuite), "
+            "puis pose une question ouverte sur leur activité actuelle. "
+            "Ne contre-argumente pas directement. Reste détendu."
+        ),
+        "mauvais_moment": (
+            "Accepte le timing avec élégance. "
+            "Demande quand serait le meilleur moment ('La semaine prochaine ? Le mois prochain ?'). "
+            "Propose de revenir à la date qu'ils choisissent."
+        ),
+        "demande_mail": (
+            "Accepte mais réoriente vers l'appel de 5 min : "
+            "'Je peux faire ça, mais franchement un appel de 5 min vous donnera plus qu'un mail de 10 pages.' "
+            "Reste chaleureux, pas insistant."
+        ),
+        "deja_suivi": (
+            "Valorise leur organisation ('C'est un excellent signe — les meilleurs combinent les outils'). "
+            "Souligne ce que Miizy fait qu'aucun autre ne fait : 40k lots neufs + CRM + version gratuite. "
+            "Propose juste 20 min pour voir si ça complète ce qu'ils ont."
+        ),
+        "inconnu": (
+            "Le message ne rentre dans aucune case connue. Réponds de manière naturelle et humaine "
+            "en t'appuyant sur le contexte de la conversation. Maintiens le fil : "
+            "si le prospect n'a pas encore répondu à la question principale, replonge-y subtilement. "
+            "Sinon, continue la conversation vers le RDV. Reste simple, chaleureux, pas insistant."
+        ),
+    }
+    guidance = _OBJECTION_GUIDANCE.get(objection_type, _OBJECTION_GUIDANCE["inconnu"])
+
+    system_prompt = (
+        "Tu es Adam, commercial terrain chez Miizy. Tu relances des professionnels de "
+        "l'immobilier sur WhatsApp.\n\n"
+        "TON PERSONA :\n"
+        "- 'L'Audace Empathique' : tu assumes l'intrusion frontalement "
+        "('Je plaide coupable', 'Je préfère me faire gronder plutôt que de ne pas essayer')\n"
+        "- Transparence radicale : tu parles cash, sans langue de bois\n"
+        "- Phrases courtes, punchy. Max 2 emojis par message (🤝 🎯 🏆 🎁)\n\n"
+        "MIIZY EN 1 LIGNE :\n"
+        "40 000 lots neufs en France + CRM complet + multidiffusion annonces — version gratuite dispo.\n"
+        "Objectif unique : obtenir un RDV de 20 min (visio ou appel).\n\n"
+        "RÈGLE TEMPO ABSOLUE — NE JAMAIS VIOLER :\n"
+        "1. D'abord : propose la visio/appel de 20 min\n"
+        "2. SEULEMENT après confirmation d'intérêt → 'On prend le pari ?' "
+        "(version offerte si pas convaincu)\n"
+        "→ Ne JAMAIS mettre ces 2 éléments dans le même message.\n\n"
+        "STYLE — exemples :\n"
+        "✓ 'Ah d'accord, et vous travaillez sur quel type de biens en ce moment ?'\n"
+        "✓ 'Je plaide coupable — mais 20 min pour voir Miizy, c'est vraiment peu pour ce que ça peut apporter.'\n"
+        "✗ 'Pourriez-vous me préciser votre situation actuelle ?'\n\n"
+        "CONTRAINTE STRICTE : 2-4 phrases max. Jamais de liste à puces. "
+        "Toujours terminer par une question ou une invitation douce vers le RDV."
+    )
+
+    prompt = (
+        f"CONVERSATION :\n{hist_str}\n\n"
+        f"NOUVEAU MESSAGE DU PROSPECT : \"{user_msg}\"\n"
+        f"TYPE D'OBJECTION : {objection_type}\n"
+        f"PRÉNOM : {prenom or '(inconnu)'}\n"
+        f"ÉTAPE WORKFLOW : {step}\n\n"
+        f"GUIDANCE SPÉCIFIQUE : {guidance}\n\n"
+        "Génère UNE réponse naturelle en français. 2-4 phrases max. "
+        "Pas de liste. Terminer par une question/invitation RDV."
+    )
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 250,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            reply = resp.json()["content"][0]["text"].strip()
+            try:
+                _track_llm_cost(resp.json().get("usage", {}), "miizy_adam_objection")
+            except Exception:
+                pass
+            logger.info(f"[Miizy][Adam] objection={objection_type} reply={reply[:80]}")
+            session.add_history("assistant", reply)
+            return reply, ""
+        logger.warning(f"[Miizy][Adam] API error {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"[Miizy][Adam] Exception: {e}")
+
+    return "", ""
 
 
 def _track_llm_cost(usage: dict, label: str):
@@ -453,6 +613,11 @@ class MiizyAgent:
             branch = detect_branch(txt)
 
             if not branch:
+                # Avant le LLM : vérifier si c'est une objection → répondre style Adam
+                objection = _detect_objection(txt)
+                if objection:
+                    return _generate_adam_response(txt, step, self.session, objection)
+
                 result = _classify_with_llm(
                     txt, "WAITING_NEUF_ANCIEN",
                     [(h["role"], h["content"]) for h in self.session.get("history", [])]
@@ -460,9 +625,9 @@ class MiizyAgent:
                 intention = result["intention"]
 
                 if intention == "UNCLEAR":
-                    # Hors sujet → silence
-                    logger.info(f"[Miizy] UNCLEAR neuf/ancien — silence pour {self.phone}")
-                    return "", ""
+                    # Pas de silence : l'agent génère une réponse Adam contextuelle
+                    logger.info(f"[Miizy] UNCLEAR neuf/ancien — réponse Adam pour {self.phone}")
+                    return _generate_adam_response(txt, step, self.session, "inconnu")
 
                 branch = "A" if intention == "A" else "B"
 
@@ -476,14 +641,19 @@ class MiizyAgent:
         if step in ("WAITING_RDV_A", "WAITING_RDV_B"):
             detection = detect_yes_no(txt)
             if not detection:
+                # Vérifier si c'est une objection avant de classer OUI/NON
+                objection = _detect_objection(txt)
+                if objection:
+                    return _generate_adam_response(txt, step, self.session, objection)
+
                 result = _classify_with_llm(
                     txt, step,
                     [(h["role"], h["content"]) for h in self.session.get("history", [])]
                 )
                 intention = result["intention"]
                 if intention == "UNCLEAR":
-                    logger.info(f"[Miizy] UNCLEAR rdv — silence pour {self.phone}")
-                    return "", ""
+                    logger.info(f"[Miizy] UNCLEAR rdv — réponse Adam pour {self.phone}")
+                    return _generate_adam_response(txt, step, self.session, "inconnu")
                 detection = intention
 
             if detection == "OUI":
@@ -522,10 +692,13 @@ class MiizyAgent:
         if step in ("WAITING_CALENDLY_A", "WAITING_CALENDLY_B"):
             detection = detect_yes_no(txt)
             if not detection:
+                objection = _detect_objection(txt)
+                if objection:
+                    return _generate_adam_response(txt, step, self.session, objection)
                 result = _classify_with_llm(txt, step, [(h["role"], h["content"]) for h in self.session.get("history", [])])
                 detection = result["intention"]
                 if detection == "UNCLEAR":
-                    return "", ""
+                    return _generate_adam_response(txt, step, self.session, "inconnu")
             if detection == "OUI":
                 branch = "A" if step == "WAITING_CALENDLY_A" else "B"
                 # Confirme que le prospect a pris un créneau
@@ -541,18 +714,22 @@ class MiizyAgent:
 
         # ── DONE : conversation fermée ──────────────────────────────────────
         if step == "DONE":
-            t = _normalize(txt)
+            t_norm = _normalize(txt)
+            # Rouverture explicite → re-proposer des créneaux
             if re.search(
                 r"\b(finalement|en fait|reconsidere|j y pense|je veux bien|"
-                r"interesse|interessé|dispo|disponible|rdv|rendez.vous)\b", t
+                r"interesse|interessé|dispo|disponible|rdv|rendez.vous)\b", t_norm
             ) or detect_yes_no(txt) == "OUI":
                 branch = self.session.get("branch", "A") or "A"
                 return self._propose_slots(branch)
+            # Message inattendu en DONE → réponse Adam légère (pas de relance lourde)
+            if len(txt.strip()) > 3:
+                return _generate_adam_response(txt, step, self.session, "inconnu")
             return "", ""
 
-        # Fallback inconnu
-        logger.warning(f"[Miizy] Step inconnu: {step} — ignoré")
-        return "", ""
+        # Fallback step inconnu → réponse Adam générique
+        logger.warning(f"[Miizy] Step inconnu: {step} — réponse Adam générique")
+        return _generate_adam_response(txt, step, self.session, "inconnu")
 
     def _create_callback_task(self):
         """Crée un rappel Google Calendar pour recontacter le prospect."""
