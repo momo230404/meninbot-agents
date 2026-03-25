@@ -1,0 +1,104 @@
+{
+  "scenarios": {
+    "rdv_propose": {
+      "label": "Proposition RDV",
+      "description": "Après avoir présenté le stock, l'agent propose un RDV. Une variante est choisie aléatoirement à chaque fois.",
+      "responses": [
+        "Pour vous conseiller valablement et affiner vos critères, je vous propose un rendez-vous téléphonique ou visio ?",
+        "Pour aller plus loin et vous présenter ce qui correspond vraiment à votre projet, un appel ou visio vous conviendrait ?",
+        "Pour affiner vos critères et vous conseiller au mieux, je vous suggère un court échange téléphonique ou en visio. Seriez-vous disponible prochainement ?"
+      ]
+    },
+    "branche_non": {
+      "label": "Lead répond NON (plus intéressé)",
+      "description": "Le lead n'est plus en recherche ou ne souhaite pas continuer.",
+      "responses": [
+        "Je comprends. Avez-vous trouvé votre bonheur de votre côté ?"
+      ]
+    },
+    "rdv_accepte_email": {
+      "label": "RDV accepté → demande email",
+      "description": "Le lead accepte le RDV, Daniel demande son email pour l'invitation Google Meet.",
+      "responses": [
+        "Parfait {prenom} ! Pour vous envoyer l'invitation, pourriez-vous me communiquer votre adresse email ?"
+      ]
+    },
+    "rdv_refuse": {
+      "label": "RDV refusé",
+      "description": "Le lead ne souhaite pas de rendez-vous.",
+      "responses": [
+        "Je comprends tout à fait. N'hésitez pas à revenir vers moi. Belle journée !"
+      ]
+    },
+    "bonjour": {
+      "label": "Bonjour / Salut",
+      "description": "Le lead envoie juste un message de salutation.",
+      "responses": [
+        "Test bonjour modified"
+      ]
+    },
+    "rdv_confirme_avec_lien": {
+      "label": "RDV confirmé (avec lien Meet)",
+      "description": "RDV confirmé avec lien Google Meet. {prenom}, {creneau} et {lien_meet} sont remplacés automatiquement.",
+      "responses": [
+        "C'est parfait {prenom} ! Votre RDV est confirmé pour le {creneau}. Lien Google Meet : {lien_meet} — À très bientôt !"
+      ]
+    },
+    "rdv_confirme_sans_lien": {
+      "label": "RDV confirmé (sans lien)",
+      "description": "RDV confirmé mais sans email fourni donc sans lien Meet. {prenom} et {creneau} sont remplacés.",
+      "responses": [
+        "C'est parfait {prenom} ! Votre RDV est confirmé pour le {creneau}. Je vous appelle à l'heure convenue. À très bientôt !"
+      ]
+    },
+    "fallback": {
+      "label": "Message non compris",
+      "description": "L'agent ne comprend pas le message du lead.",
+      "responses": [
+        "Je n'ai pas bien compris. Êtes-vous toujours en recherche d'un bien immobilier ?"
+      ]
+    },
+    "relance_creneau": {
+      "label": "Relance créneaux (aucun ne convient)",
+      "description": "Aucun créneau proposé ne convient — on demande les disponibilités générales.",
+      "responses": [
+        "De votre côté, êtes-vous plutôt disponible en journée (entre 9h et 18h) en début de semaine ou plutôt en fin de semaine ? Et plutôt le matin ou l'après-midi ?"
+      ]
+    },
+    "stop": {
+      "label": "STOP / Désinscription",
+      "description": "Le lead demande à ne plus être contacté.",
+      "responses": [
+        "Bien sûr, je ne vous recontacterai plus. Bonne continuation et n'hésitez pas à revenir si votre projet évolue."
+      ]
+    },
+    "identity": {
+      "label": "Identité de Daniel",
+      "description": "Le lead demande qui est Daniel.",
+      "responses": [
+        "Je suis Daniel, conseiller chez Vianova — une plateforme spécialisée dans l'immobilier neuf. Je suis là pour vous aider à trouver le bien qui correspond à votre projet."
+      ]
+    },
+    "vianova": {
+      "label": "Qu'est-ce que Vianova ?",
+      "description": "Le lead demande ce qu'est Vianova.",
+      "responses": [
+        "Vianova est une plateforme qui connecte les acquéreurs avec les meilleurs programmes immobiliers neufs. Nous accompagnons votre projet de A à Z."
+      ]
+    },
+    "numero": {
+      "label": "D'où vient ce numéro ?",
+      "description": "Le lead demande comment on a eu son numéro.",
+      "responses": [
+        "Vous aviez manifesté votre intérêt pour de l'immobilier neuf, c'est dans ce cadre que je vous contacte. Je suis Daniel, conseiller chez Vianova."
+      ]
+    },
+    "insult": {
+      "label": "Insultes / Agressivité",
+      "description": "Le lead est agressif ou utilise des insultes.",
+      "responses": [
+        "Je comprends que vous puissiez être contrarié, et je vous présente mes excuses si mon message vous a dérangé. Je reste disponible si votre situation évolue. Bonne journée."
+      ]
+    }
+  }
+}

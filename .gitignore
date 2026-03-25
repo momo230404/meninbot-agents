@@ -1,0 +1,31 @@
+# Secrets & credentials
+config.json
+client_secret_gdrive.json
+google_credentials.json
+miizy_credentials.json
+oauth_credentials.json
+token.json
+users.json
+
+# Données clients (RGPD)
+leads.json
+miizy_leads.json
+hidden_conversations.json
+conversations/
+
+# Logs & cache
+*.log
+logs/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Env Python
+venv/
+
+# Backups
+*.bak
+dashboard_backup_*.html
+dashboard_old.html
+webhook.log

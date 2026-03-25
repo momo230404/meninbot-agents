@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  vianova-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vianova-dashboard
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_DEBUG=0
+    volumes:
+      - ./logs:/app/logs
+    restart: always
+    networks:
+      - vianova-net
+
+networks:
+  vianova-net:
+    driver: bridge
