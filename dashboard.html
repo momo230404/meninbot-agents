@@ -756,7 +756,13 @@
                     <div class="card">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px;">
                             <h2>👥 Gestion des Leads</h2>
-                            <div style="display: flex; gap: 10px;">
+                            <div style="display: flex; gap: 10px; align-items:center; flex-wrap:wrap;">
+                                <!-- Sélecteur commercial import (admin Miizy uniquement) -->
+                                <div id="import-commercial-block" style="display:none;">
+                                    <select id="import-commercial-select" style="padding:8px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;background:#f8fafc;" title="Assigner ces leads à un commercial">
+                                        <option value="">Adam (défaut)</option>
+                                    </select>
+                                </div>
                                 <label class="file-label">
                                     📥 Importer CSV
                                     <input type="file" id="csv-upload" accept=".csv" onchange="handleCSVUpload()">
@@ -1198,6 +1204,15 @@
                                     <div id="preview-reset-hint" style="display:none;margin-top:8px;">
                                         <button onclick="campResetPreview()" style="font-size:11px;color:#718096;background:none;border:none;cursor:pointer;padding:0;text-decoration:underline;">← Revenir à l'aperçu générique</button>
                                     </div>
+                                </div>
+
+                                <!-- Sélecteur commercial (admin Miizy uniquement) -->
+                                <div id="camp-commercial-block" style="display:none;margin-bottom:14px;">
+                                    <label style="font-size:12px;font-weight:600;color:#4a5568;display:block;margin-bottom:6px;">📱 Envoyer via le numéro de :</label>
+                                    <select id="camp-commercial-select" onchange="campOnCommercialChange(this.value)" style="width:100%;padding:8px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;background:#f8fafc;">
+                                        <option value="">Adam (IA — défaut)</option>
+                                    </select>
+                                    <div id="camp-commercial-info" style="margin-top:6px;font-size:11px;color:#718096;"></div>
                                 </div>
 
                                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:14px 0 16px;font-size:13px;color:#4a5568;">
@@ -1807,6 +1822,10 @@
                 if (meRes.ok) {
                     window.CURRENT_USER = await meRes.json();
                     const role = window.CURRENT_USER.role;
+                    // Charger commerciaux si admin Miizy (pour import + campagnes)
+                    if (role === 'admin' && CURRENT_AGENT === 'miizy') {
+                        loadMiizyCommerciaux();
+                    }
 
                     // Badge admin
                     if (role === 'admin') {
@@ -1837,7 +1856,10 @@
                     // Masquer sections admin UNIQUEMENT pour le lien Daniel (?agent=vianova)
                     // Pas pour les domaines vianova.meninbot.com ou miizy.meninbot.com
                     const _fromUrlParam = !!_urlParams.get('agent');
-                    const _isRestrictedRole = window.CURRENT_USER && ['daniel','mohamed'].includes(window.CURRENT_USER.role);
+                    const _isRestrictedRole = window.CURRENT_USER && (
+                        ['daniel','mohamed'].includes(window.CURRENT_USER.role) ||
+                        window.CURRENT_USER.role === 'miizy_commercial'
+                    );
                     if (_fromUrlParam || _isRestrictedRole) {
                         document.querySelectorAll('.nav-admin-only').forEach(el => el.style.display = 'none');
                     }
@@ -1955,6 +1977,10 @@
             if (section === 'campaigns') {
                 if (!leads.length) loadLeads();
                 else updateCampLists();
+                // Charger les commerciaux si admin Miizy
+                if (CURRENT_AGENT === 'miizy' && window.CURRENT_USER && window.CURRENT_USER.role === 'admin') {
+                    loadMiizyCommerciaux();
+                }
             }
             if (section === 'stats') {
                 loadStats();
@@ -2009,12 +2035,17 @@
         }
 
         // ============= LEADS TABLE =============
-        async function loadLeads() {
+        async function loadLeads(filterCommercial) {
             try {
-                const res = await fetch(`${API_URL}/leads`);
+                let url = `${API_URL}/leads`;
+                // Admin Miizy : filtre par commercial si sélectionné
+                if (CURRENT_AGENT === 'miizy' && filterCommercial) {
+                    url += `?commercial_id=${encodeURIComponent(filterCommercial)}`;
+                }
+                const res = await fetch(url);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
-                
+
                 if (data.success && Array.isArray(data.leads)) {
                     leads = data.leads;
                     filteredLeads = leads;
@@ -2819,6 +2850,50 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
 
         // ============= CAMPAIGNS =============
         let campSelectedPhones = new Set();
+        let _miizyCommerciaux = [];  // Cache des commerciaux chargés
+
+        async function loadMiizyCommerciaux() {
+            try {
+                const res = await fetch(`${API_URL}/commerciaux`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data.success) return;
+                _miizyCommerciaux = data.commerciaux || [];
+
+                // Remplir le sélecteur campagne
+                const campSel = document.getElementById('camp-commercial-select');
+                const importSel = document.getElementById('import-commercial-select');
+                [campSel, importSel].forEach(sel => {
+                    if (!sel) return;
+                    sel.innerHTML = '<option value="">Adam (IA — défaut)</option>';
+                    _miizyCommerciaux.filter(c => c.id !== 'adam').forEach(c => {
+                        sel.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+                    });
+                });
+
+                // Afficher les blocs
+                const campBlock = document.getElementById('camp-commercial-block');
+                const importBlock = document.getElementById('import-commercial-block');
+                if (campBlock) campBlock.style.display = 'block';
+                if (importBlock) importBlock.style.display = 'block';
+            } catch(e) {
+                console.warn('loadMiizyCommerciaux error:', e);
+            }
+        }
+
+        function campOnCommercialChange(commercialId) {
+            const info = document.getElementById('camp-commercial-info');
+            if (!info) return;
+            if (!commercialId) {
+                info.textContent = 'Messages envoyés depuis le numéro Adam (IA)';
+            } else {
+                const c = _miizyCommerciaux.find(x => x.id === commercialId);
+                info.textContent = c ? `Messages envoyés depuis le numéro WhatsApp de ${c.name}` : '';
+            }
+            // Recharger les leads filtrés par ce commercial
+            loadLeads(commercialId || null);
+        }
+
 
         function updateCampPreview() {
             const message = document.getElementById('message-editor').value;
@@ -2967,10 +3042,43 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
 
             const isDryRun = document.getElementById('dry-run-check').checked;
             const btn = document.getElementById('camp-launch-btn');
-            btn.disabled = true;
-            btn.textContent = `⏳ Envoi en cours (0/${campSelectedPhones.size})...`;
-
             const selectedLeads = leads.filter(l => campSelectedPhones.has(l.telephone || l.phone));
+
+            // ── Mode Miizy : campagne background (non bloquante) ──
+            if (CURRENT_AGENT === 'miizy' && !isDryRun) {
+                const commercialId = (document.getElementById('camp-commercial-select') || {}).value || '';
+                const commercialName = commercialId
+                    ? (_miizyCommerciaux.find(c => c.id === commercialId) || {}).name || commercialId
+                    : 'Adam (IA)';
+                btn.disabled = true;
+                btn.textContent = '⏳ Lancement en arrière-plan...';
+                try {
+                    const res = await fetch(`${API_URL}/campaign/launch-background`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ message, leads: selectedLeads, commercial_id: commercialId })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        showAlert(`✅ Campagne lancée via ${commercialName} — ${data.total} leads en file.\nL'envoi continue en arrière-plan, vous pouvez fermer cette fenêtre.`);
+                        // Lancer le polling de progression
+                        _pollCampaignProgress(data.job_id, data.total, commercialName);
+                    } else {
+                        showAlert(`❌ Erreur : ${data.error}`, 'error');
+                    }
+                } catch(e) {
+                    showAlert('❌ Erreur réseau lors du lancement', 'error');
+                }
+                campSelectedPhones.clear();
+                btn.disabled = false;
+                btn.textContent = '▶️ LANCER LA CAMPAGNE';
+                updateCampSelectionUI();
+                return;
+            }
+
+            // ── Mode Vianova ou dry-run : envoi synchrone ──
+            btn.disabled = true;
+            btn.textContent = `⏳ Envoi en cours (0/${selectedLeads.length})...`;
             let done = 0, errors = 0;
 
             for (const lead of selectedLeads) {
@@ -3000,6 +3108,33 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
             btn.textContent = '▶️ LANCER LA CAMPAGNE';
             updateCampSelectionUI();
             loadLeads();
+        }
+
+        // Polling progression campagne background Miizy
+        function _pollCampaignProgress(jobId, total, commercialName) {
+            let lastSent = 0;
+            const interval = setInterval(async () => {
+                try {
+                    const res = await fetch(`${API_URL}/campaign/progress/${jobId}`);
+                    if (!res.ok) { clearInterval(interval); return; }
+                    const d = await res.json();
+                    if (!d.success) { clearInterval(interval); return; }
+                    if (d.sent !== lastSent) {
+                        lastSent = d.sent;
+                        showToast(`📤 Campagne ${commercialName} : ${d.sent}/${total} envoyés`, 'info');
+                    }
+                    if (['done', 'cancelled', 'paused_night'].includes(d.status)) {
+                        clearInterval(interval);
+                        const msg = d.status === 'done'
+                            ? `✅ Campagne terminée via ${commercialName} — ${d.sent} envoyés, ${d.errors} erreurs`
+                            : d.status === 'paused_night'
+                            ? `🌙 Campagne suspendue (hors plage horaire) — reprendra à 8h`
+                            : `⛔ Campagne annulée`;
+                        showAlert(msg);
+                        loadLeads();
+                    }
+                } catch(e) { clearInterval(interval); }
+            }, 30000); // polling toutes les 30s
         }
 
 

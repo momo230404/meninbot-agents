@@ -99,6 +99,48 @@ except Exception as e:
     logger.warning(f"⚠️  Evolution API Miizy non disponible: {e}")
     miizy_evolution_api = evolution_api  # fallback
 
+# ── Instances Evolution par commercial Miizy ────────────────────────────────
+_miizy_commercial_evo: Dict[str, Any] = {}        # {commercial_id: EvolutionAPI}
+_miizy_instance_to_commercial: Dict[str, str] = {} # {instance_name_lower: commercial_id}
+
+for _comm_id, _comm_cfg in CONFIG.get('miizy_commerciaux', {}).items():
+    try:
+        _evo_inst = EvolutionAPI(
+            _comm_cfg['api_key'],
+            _comm_cfg['base_url'],
+            _comm_cfg['instance_name'],
+        )
+        _miizy_commercial_evo[_comm_id] = _evo_inst
+        _miizy_instance_to_commercial[_comm_cfg['instance_name'].lower()] = _comm_id
+        logger.info(f"✅ Commercial Miizy '{_comm_id}' ({_comm_cfg['instance_name']}) prêt")
+    except Exception as _e:
+        logger.warning(f"⚠️  Commercial Miizy '{_comm_id}' erreur: {_e}")
+
+# Fallback : Adam pointe sur miizy_evolution_api si absent de config
+if 'adam' not in _miizy_commercial_evo:
+    _miizy_commercial_evo['adam'] = miizy_evolution_api
+    _miizy_instance_to_commercial[_miizy_evo_cfg['instance_name'].lower()] = 'adam'
+
+
+def _get_commercial_evo(commercial_id: str):
+    """Retourne l'instance Evolution du commercial (fallback : Adam)."""
+    return _miizy_commercial_evo.get(commercial_id or 'adam', miizy_evolution_api)
+
+
+def _instance_name_to_commercial(instance_name: str) -> str:
+    """Identifie le commercial_id depuis le nom d'instance Evolution."""
+    return _miizy_instance_to_commercial.get((instance_name or '').lower(), 'adam')
+
+
+def _get_session_commercial_id():
+    """Retourne le commercial_id du user connecté, ou None si admin."""
+    try:
+        users = _load_users()
+        email = session.get('user_email', '')
+        return users.get(email, {}).get('commercial_id')
+    except Exception:
+        return None
+
 _miizy_leads_file = CONFIG.get('miizy', {}).get('leads_json_file', 'miizy_leads.json')
 try:
     # Initialiser miizy_leads.json si vide ou invalide
@@ -186,6 +228,11 @@ def _save_users(users):
             json.dump(users, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.error(f"Erreur sauvegarde users.json: {e}")
+
+
+def _is_miizy_commercial_role(role: str) -> bool:
+    """Retourne True si le rôle est un commercial Miizy (accès limité)."""
+    return role in ('miizy_commercial', 'mohamed', 'dorian')
 
 # ==================== ÉTATS ====================
 STATE_TRANSITIONS = {
@@ -523,7 +570,19 @@ def get_leads():
     """Récupère tous les leads avec leurs états"""
     try:
         leads = leads_manager.list_leads()
-        
+
+        # Filtrage par commercial_id pour les comptes commerciaux Miizy
+        _is_miizy_route = '/miizy/' in request.path
+        if _is_miizy_route:
+            _comm_id = _get_session_commercial_id()
+            if _comm_id:  # commercial → voit uniquement ses leads
+                leads = [l for l in leads if l.get('commercial_id', '') == _comm_id]
+
+        # Filtrage par commercial_id demandé explicitement (admin qui filtre)
+        _filter_comm = request.args.get('commercial_id')
+        if _filter_comm and not _get_session_commercial_id():
+            leads = [l for l in leads if l.get('commercial_id', '') == _filter_comm]
+
         # Ajouter info relance
         enriched_leads = []
         for lead in leads:
@@ -531,7 +590,7 @@ def get_leads():
                 **lead,
                 "needs_relance": should_relance(lead)
             })
-        
+
         return jsonify({
             "success": True,
             "count": len(enriched_leads),
@@ -567,8 +626,10 @@ def add_lead():
             'etat': data.get('etat', data.get('state', 'initial')),
             'state': data.get('etat', data.get('state', 'initial')),
             'ai_enabled': data.get('ai_enabled', True),
-            'source': data.get('source', 'api')
+            'source': data.get('source', 'api'),
         }
+        if data.get('commercial_id'):
+            lead_data['commercial_id'] = data['commercial_id']
         
         # Ajouter dans Redis
         phone = lead_data['phone']
@@ -675,6 +736,8 @@ def import_leads():
             elif not tel_clean.startswith('+'):
                 tel_clean = '+33' + tel_clean
 
+            # commercial_id : priorité à la valeur par item, sinon valeur globale du body
+            _comm_id = item.get('commercial_id') or data.get('commercial_id') or ''
             lead_data = {
                 'phone': tel_clean,
                 'telephone': tel_clean,
@@ -690,6 +753,8 @@ def import_leads():
                 'source': 'csv_import',
                 'ai_enabled': True,
             }
+            if _comm_id:
+                lead_data['commercial_id'] = _comm_id
 
             try:
                 leads_manager.add_lead(lead_data)
@@ -1104,6 +1169,17 @@ def launch_campaign():
         logger.error(f"Error launching campaign: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/miizy/api/commerciaux', methods=['GET'])
+def miizy_get_commerciaux():
+    """Retourne la liste des commerciaux Miizy configurés."""
+    if not session.get('user_email'):
+        return jsonify({'error': 'Non authentifié'}), 401
+    commerciaux = []
+    for comm_id, cfg in CONFIG.get('miizy_commerciaux', {}).items():
+        commerciaux.append({'id': comm_id, 'name': cfg.get('name', comm_id)})
+    return jsonify({'success': True, 'commerciaux': commerciaux})
+
+
 @app.route('/miizy/api/campaign/launch-background', methods=['POST'])
 def miizy_launch_background_campaign():
     """Lance une campagne Miizy en arrière-plan — non bloquant, indépendant du navigateur."""
@@ -1128,11 +1204,14 @@ def miizy_launch_background_campaign():
         if not valid_leads:
             return jsonify({"success": False, "error": "Aucun lead avec numéro valide"}), 400
 
+        commercial_id = data.get('commercial_id') or ''
+
         job_id = f"miizy_{int(datetime.now().timestamp())}"
         progress_key = f"{_MIIZY_CAMPAIGN_PROGRESS_PREFIX}{job_id}"
 
         job_data = {
             "job_id": job_id,
+            "commercial_id": commercial_id,
             "total": len(valid_leads),
             "sent": 0,
             "errors": 0,
@@ -1144,7 +1223,7 @@ def miizy_launch_background_campaign():
 
         t = threading.Thread(
             target=_miizy_campaign_worker,
-            args=(job_id, message_tpl, valid_leads),
+            args=(job_id, message_tpl, valid_leads, commercial_id),
             daemon=True,
             name=f"miizy_campaign_{job_id}",
         )
@@ -1345,10 +1424,12 @@ def _miizy_sequence_engine_start():
 _MIIZY_CAMPAIGN_PROGRESS_PREFIX = "miizy:campaign:progress:"
 
 
-def _miizy_campaign_worker(job_id: str, message_tpl: str, leads: list):
+def _miizy_campaign_worker(job_id: str, message_tpl: str, leads: list, commercial_id: str = ''):
     """Worker campagne Miizy — tourne en arrière-plan, indépendant du navigateur."""
     import random, time as _t
     progress_key = f"{_MIIZY_CAMPAIGN_PROGRESS_PREFIX}{job_id}"
+    # Instance Evolution à utiliser : commercial sélectionné ou Adam par défaut
+    _evo = _get_commercial_evo(commercial_id or 'adam')
 
     sent = errors = 0
 
@@ -1384,15 +1465,18 @@ def _miizy_campaign_worker(job_id: str, message_tpl: str, leads: list):
             continue
 
         msg = _render_message(message_tpl, lead)
-        result = miizy_evolution_api.send_text(phone, msg)
+        result = _evo.send_text(phone, msg)
 
         if result.get("success"):
             try:
-                miizy_leads_manager.update_lead(phone, {
+                _upd = {
                     "sent_at": datetime.now().isoformat(),
                     "state": "envoye",
                     "etat": "envoye",
-                })
+                }
+                if commercial_id:
+                    _upd["commercial_id"] = commercial_id
+                miizy_leads_manager.update_lead(phone, _upd)
             except Exception:
                 pass
             sent += 1
@@ -2958,6 +3042,15 @@ def _process_miizy_buffered(phone: str):
                 logger.warning(f"[Miizy][dedup] message identique bloqué < 10s")
             else:
                 _send_cache[cache_key] = now_ts
+                # Choisir l'instance Evolution selon le commercial assigné au lead
+                _lead_comm = 'adam'
+                try:
+                    _l = miizy_leads_manager.get_lead(phone)
+                    if _l:
+                        _lead_comm = _l.get('commercial_id', 'adam') or 'adam'
+                except Exception:
+                    pass
+                _evo_to_use = _get_commercial_evo(_lead_comm)
                 all_parts = []
                 for _msg in [reply1, reply2]:
                     if _msg:
@@ -2969,7 +3062,7 @@ def _process_miizy_buffered(phone: str):
                         _pause = min(2 + len(all_parts[_i - 1]) // 60, 5)
                         _time.sleep(_pause)
                         _delay = _calc_typing_delay(_part, min_s=2.0, max_s=6.0)
-                    miizy_evolution_api.send_text(phone, _part, delay=_delay)
+                    _evo_to_use.send_text(phone, _part, delay=_delay)
 
     except Exception as e:
         logger.error(f"[Miizy] Erreur buffer {phone}: {e}")
@@ -2978,13 +3071,17 @@ def _process_miizy_buffered(phone: str):
 
 @app.route('/miizy/webhook/whatsapp', methods=['POST'])
 def miizy_webhook_whatsapp():
-    """Webhook WhatsApp pour l'agent Miizy."""
+    """Webhook WhatsApp pour l'agent Miizy (toutes instances commerciaux)."""
     try:
         data = request.get_json(silent=True) or {}
         event = data.get("event", "")
 
         if "messages.upsert" not in event:
             return jsonify({"status": "ignored"}), 200
+
+        # Détecter quel commercial a reçu le message via le nom d'instance
+        _incoming_instance = data.get("instance", "") or data.get("instanceName", "")
+        _incoming_commercial = _instance_name_to_commercial(_incoming_instance)
 
         msg_data = data.get("data", {})
         key = msg_data.get("key", {})
@@ -3077,6 +3174,15 @@ def miizy_webhook_whatsapp():
             miizy_leads_manager.update_lead(phone, {"last_message_at": datetime.now().isoformat()})
         except Exception:
             pass
+
+        # Si le lead n'a pas encore de commercial_id, on lui attribue celui détecté
+        if _incoming_commercial and _incoming_commercial != 'adam':
+            try:
+                _l = miizy_leads_manager.get_lead(phone)
+                if _l and not _l.get('commercial_id'):
+                    miizy_leads_manager.update_lead(phone, {'commercial_id': _incoming_commercial})
+            except Exception:
+                pass
 
         # Buffer Miizy
         with _miizy_buffer_lock:
