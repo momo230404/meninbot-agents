@@ -823,6 +823,7 @@
                     <li><a href="#" data-section="agent" class="nav-link">🧠 Agent</a></li>
                     <li><a href="#" data-section="couts" class="nav-link">💰 Coûts IA</a></li>
                     <li id="nav-training-item-admin"><a href="#" data-section="training" class="nav-link">🎯 Entraînement</a></li>
+                    <li><a href="#" data-section="llm-config" class="nav-link">🔌 Connexion LLM</a></li>
                     <li id="nav-comptes-item-admin" style="display:none"><a href="#" data-section="comptes" class="nav-link">👤 Comptes</a></li>
                 </ul>
             </div>
@@ -1587,6 +1588,65 @@
                         </div>
                     </div>
                 </div>
+                <!-- SECTION LLM CONFIG -->
+                <div id="llm-config" class="section" style="display:none;">
+                    <div class="card" style="max-width:600px;margin:0 auto;">
+                        <h2 style="margin-bottom:6px;">🔌 Connexion LLM</h2>
+                        <p style="color:#718096;font-size:13px;margin-bottom:24px;">Choisissez le modèle IA utilisé par l'agent pour générer ses réponses.</p>
+
+                        <!-- Provider pills -->
+                        <div style="margin-bottom:20px;">
+                            <label style="font-size:12px;font-weight:700;color:#4a5568;display:block;margin-bottom:8px;">Fournisseur IA</label>
+                            <div style="display:flex;gap:10px;">
+                                <button id="llm-pill-openai" onclick="llmSelectProvider('openai')"
+                                    style="flex:1;padding:12px;border-radius:10px;border:2px solid #0099ff;background:rgba(0,153,255,0.1);color:#0099ff;font-weight:700;font-size:14px;cursor:pointer;transition:all 0.2s;">
+                                    🤖 OpenAI
+                                    <div style="font-size:10px;font-weight:400;opacity:0.8;margin-top:2px;">GPT-4o mini — moins cher</div>
+                                </button>
+                                <button id="llm-pill-anthropic" onclick="llmSelectProvider('anthropic')"
+                                    style="flex:1;padding:12px;border-radius:10px;border:2px solid rgba(0,0,0,0.12);background:transparent;color:#718096;font-weight:700;font-size:14px;cursor:pointer;transition:all 0.2s;">
+                                    🧠 Claude (Anthropic)
+                                    <div style="font-size:10px;font-weight:400;opacity:0.8;margin-top:2px;">claude-haiku — plus précis</div>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Modèle -->
+                        <div style="margin-bottom:16px;">
+                            <label style="font-size:12px;font-weight:700;color:#4a5568;display:block;margin-bottom:6px;">Modèle</label>
+                            <select id="llm-model-select" style="width:100%;padding:10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;background:#f8fafc;">
+                                <option value="gpt-4o-mini">gpt-4o-mini (recommandé — rapide & économique)</option>
+                                <option value="gpt-4o">gpt-4o (plus puissant)</option>
+                            </select>
+                        </div>
+
+                        <!-- Clé API -->
+                        <div style="margin-bottom:20px;">
+                            <label style="font-size:12px;font-weight:700;color:#4a5568;display:block;margin-bottom:6px;">Clé API</label>
+                            <div style="position:relative;">
+                                <input type="password" id="llm-api-key" placeholder="Collez votre clé API ici..."
+                                    style="width:100%;padding:10px 40px 10px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:monospace;">
+                                <button onclick="llmToggleKeyVis()" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;" title="Afficher/Masquer">👁</button>
+                            </div>
+                            <div id="llm-key-current" style="margin-top:4px;font-size:11px;color:#a0aec0;"></div>
+                        </div>
+
+                        <!-- Statut + boutons -->
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                            <button onclick="llmSaveConfig()" style="padding:10px 22px;background:linear-gradient(135deg,#0077b6,#00b4d8);color:white;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;">
+                                💾 Enregistrer & Tester
+                            </button>
+                            <div id="llm-status" style="font-size:13px;font-weight:600;"></div>
+                        </div>
+
+                        <!-- Info tarifs -->
+                        <div style="margin-top:24px;padding:14px;background:#f0f9ff;border-radius:10px;border:1px solid #bae6fd;font-size:12px;color:#0c4a6e;line-height:1.6;">
+                            💡 <strong>OpenAI gpt-4o-mini</strong> : ~$0.00015 / 1k tokens input — très économique<br>
+                            💡 <strong>Claude haiku</strong> : ~$0.00025 / 1k tokens input — obtenez une clé sur console.anthropic.com
+                        </div>
+                    </div>
+                </div>
+
                 <div id="comptes" class="section">
                     <div class="card">
                         <h2>👤 Gestion des Comptes</h2>
@@ -2118,6 +2178,9 @@
             }
             if (section === 'miizy-training') {
                 loadMiizyTrainingHistory();
+            }
+            if (section === 'llm-config') {
+                loadLlmConfig();
             }
         }
 
@@ -3338,6 +3401,78 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
             }, 30000); // polling toutes les 30s
         }
 
+
+        // ============= LLM CONFIG =============
+        let _llmProvider = 'openai';
+
+        function llmSelectProvider(provider) {
+            _llmProvider = provider;
+            const openaiBtn = document.getElementById('llm-pill-openai');
+            const anthropicBtn = document.getElementById('llm-pill-anthropic');
+            const modelSel = document.getElementById('llm-model-select');
+            if (provider === 'openai') {
+                openaiBtn.style.borderColor = '#0099ff';
+                openaiBtn.style.background = 'rgba(0,153,255,0.1)';
+                openaiBtn.style.color = '#0099ff';
+                anthropicBtn.style.borderColor = 'rgba(0,0,0,0.12)';
+                anthropicBtn.style.background = 'transparent';
+                anthropicBtn.style.color = '#718096';
+                modelSel.innerHTML = '<option value="gpt-4o-mini">gpt-4o-mini (recommandé — rapide & économique)</option><option value="gpt-4o">gpt-4o (plus puissant)</option>';
+            } else {
+                anthropicBtn.style.borderColor = '#7c3aed';
+                anthropicBtn.style.background = 'rgba(124,58,237,0.1)';
+                anthropicBtn.style.color = '#7c3aed';
+                openaiBtn.style.borderColor = 'rgba(0,0,0,0.12)';
+                openaiBtn.style.background = 'transparent';
+                openaiBtn.style.color = '#718096';
+                modelSel.innerHTML = '<option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (économique)</option><option value="claude-sonnet-4-5">claude-sonnet-4-5 (plus puissant)</option>';
+            }
+        }
+
+        function llmToggleKeyVis() {
+            const inp = document.getElementById('llm-api-key');
+            inp.type = inp.type === 'password' ? 'text' : 'password';
+        }
+
+        async function loadLlmConfig() {
+            try {
+                const res = await fetch(`${MIIZY_API_URL()}/llm-config`);
+                const data = await res.json();
+                if (!data.success) return;
+                llmSelectProvider(data.provider || 'openai');
+                document.getElementById('llm-model-select').value = data.model || '';
+                const keyInfo = document.getElementById('llm-key-current');
+                if (keyInfo) keyInfo.textContent = data.api_key_set ? `Clé actuelle : ${data.api_key_masked}` : 'Aucune clé configurée';
+            } catch(e) { console.warn('loadLlmConfig:', e); }
+        }
+
+        async function llmSaveConfig() {
+            const key = document.getElementById('llm-api-key').value.trim();
+            const model = document.getElementById('llm-model-select').value;
+            const statusEl = document.getElementById('llm-status');
+            if (!key) { statusEl.textContent = '⚠️ Entrez une clé API'; statusEl.style.color = '#e53e3e'; return; }
+            statusEl.textContent = '⏳ Test en cours...'; statusEl.style.color = '#718096';
+            try {
+                const res = await fetch(`${MIIZY_API_URL()}/llm-config`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({provider: _llmProvider, api_key: key, model})
+                });
+                const data = await res.json();
+                if (data.success) {
+                    statusEl.textContent = `✅ Connecté — ${data.provider} / ${data.model}`;
+                    statusEl.style.color = '#38a169';
+                    document.getElementById('llm-api-key').value = '';
+                    document.getElementById('llm-key-current').textContent = 'Clé enregistrée avec succès';
+                } else {
+                    statusEl.textContent = `❌ ${data.error}`;
+                    statusEl.style.color = '#e53e3e';
+                }
+            } catch(e) {
+                statusEl.textContent = `❌ Erreur réseau: ${e.message}`;
+                statusEl.style.color = '#e53e3e';
+            }
+        }
 
         // ============= CONVERSATIONS =============
         let currentConvJid = null;

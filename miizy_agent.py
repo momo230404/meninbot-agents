@@ -21,6 +21,61 @@ CALENDLY_LINK = MIIZY_CFG.get("calendly_link", "https://calendly.com/miizy")
 
 SESSION_TTL = 7 * 24 * 3600  # 7 jours
 
+_CONFIG_PATH = Path(__file__).parent / "config.json"
+
+def _get_llm_config() -> dict:
+    """Relit config.json pour récupérer la config LLM à chaud (sans redémarrer)."""
+    try:
+        cfg = json.loads(_CONFIG_PATH.read_text())
+        return cfg.get("llm", {})
+    except Exception:
+        return {}
+
+def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 250) -> str:
+    """
+    Appelle le LLM configuré (OpenAI ou Anthropic) et retourne le texte généré.
+    Lève RuntimeError si crédit insuffisant.
+    """
+    llm = _get_llm_config()
+    provider = llm.get("provider", "anthropic").lower()
+    api_key = llm.get("api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
+    model = llm.get("model", "gpt-4o-mini" if provider == "openai" else "claude-haiku-4-5-20251001")
+
+    if not api_key:
+        raise RuntimeError("CREDIT_INSUFFISANT: Aucune clé API configurée")
+
+    if provider == "openai":
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": model, "max_tokens": max_tokens,
+                  "messages": [{"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt}]},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        err = resp.json().get("error", {}).get("message", "") if resp.headers.get("content-type","").startswith("application/json") else ""
+        if "quota" in err.lower() or "billing" in err.lower() or "insufficient" in err.lower():
+            raise RuntimeError(f"CREDIT_INSUFFISANT: {err[:120]}")
+        raise RuntimeError(f"OpenAI error {resp.status_code}: {err[:80]}")
+
+    else:  # anthropic
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": model, "max_tokens": max_tokens,
+                  "system": system_prompt,
+                  "messages": [{"role": "user", "content": user_prompt}]},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()["content"][0]["text"].strip()
+        err = resp.json().get("error", {}).get("message", "") if resp.headers.get("content-type","").startswith("application/json") else ""
+        if "credit" in err.lower() or "balance" in err.lower():
+            raise RuntimeError(f"CREDIT_INSUFFISANT: {err[:120]}")
+        raise RuntimeError(f"Anthropic error {resp.status_code}: {err[:80]}")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MESSAGES EXACTS DU WORKFLOW (jamais modifiés par le LLM)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -189,14 +244,9 @@ def _detect_objection(txt: str) -> Optional[str]:
 
 def _classify_with_llm(user_msg: str, step: str, history: list) -> dict:
     """
-    Appelle Claude Haiku pour classifier l'intention.
+    Classifie l'intention du prospect via le LLM configuré (OpenAI ou Anthropic).
     Retourne {"intention": "OUI"|"NON"|"UNCLEAR", "clarification": str|None}
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        logger.warning("[Miizy LLM] Pas de ANTHROPIC_API_KEY — fallback NON")
-        return {"intention": "NON", "clarification": None}
-
     step_desc = {
         "WAITING_NEUF_ANCIEN": (
             "Le prospect doit indiquer s'il travaille sur du NEUF, de l'ANCIEN, ou les deux. "
@@ -209,74 +259,34 @@ def _classify_with_llm(user_msg: str, step: str, history: list) -> dict:
     }.get(step, "Détecter l'intention du prospect.")
 
     is_branch_step = step in ("WAITING_NEUF_ANCIEN",)
-
     hist_str = "\n".join(
         f"{'Prospect' if r == 'user' else 'Agent'}: {c[:150]}"
         for r, c in history[-6:]
     ) or "(début de conversation)"
 
-    if is_branch_step:
-        format_instructions = (
-            'Réponds UNIQUEMENT en JSON : {"intention": "A"|"B"|"UNCLEAR", '
-            '"clarification": "message court si UNCLEAR, sinon null"}'
-        )
-    else:
-        format_instructions = (
-            'Réponds UNIQUEMENT en JSON : {"intention": "OUI"|"NON"|"UNCLEAR", '
-            '"clarification": "message court si UNCLEAR, sinon null"}'
-        )
+    fmt = ('{"intention": "A"|"B"|"UNCLEAR", "clarification": "...ou null"}'
+           if is_branch_step else
+           '{"intention": "OUI"|"NON"|"UNCLEAR", "clarification": "...ou null"}')
 
-    prompt = f"""Tu analyses les réponses d'un agent immobilier dans une conversation WhatsApp commerciale.
-
-ÉTAPE ACTUELLE : {step_desc}
-
+    system = "Tu es un classificateur d'intention dans une conversation WhatsApp commerciale immobilier. Réponds UNIQUEMENT en JSON valide."
+    user_prompt = f"""ÉTAPE : {step_desc}
 HISTORIQUE :
 {hist_str}
-
-NOUVEAU MESSAGE DU PROSPECT : "{user_msg}"
-
+NOUVEAU MESSAGE : "{user_msg}"
 RÈGLES :
-- Considère tout signal positif, enthousiaste ou implicitement d'accord comme OUI{'/A' if is_branch_step else ''}.
-- Considère tout refus, hésitation forte, désintérêt ou réponse négative comme NON{'/B' if is_branch_step else ''}.
-- UNCLEAR uniquement si vraiment impossible à déterminer → fournis une question de clarification très courte (1 phrase).
-- Analyse le sous-texte, pas juste les mots.
-
-{format_instructions}"""
+- Signal positif/accord implicite → OUI{"ou A" if is_branch_step else ""}
+- Refus/hésitation forte/désintérêt → NON{"ou B" if is_branch_step else ""}
+- UNCLEAR seulement si impossible → ajoute une courte question de clarification
+Réponds : {fmt}"""
 
     try:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 100,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=8,
-        )
-        if resp.status_code == 200:
-            raw = resp.json()["content"][0]["text"].strip()
-            m = re.search(r"\{.*\}", raw, re.DOTALL)
-            if m:
-                parsed = json.loads(m.group())
-                intention = parsed.get("intention", "UNCLEAR").upper()
-                clarification = parsed.get("clarification") or None
-                try:
-                    _track_llm_cost(resp.json().get("usage", {}), "miizy_classify")
-                except Exception:
-                    pass
-                logger.info(f"[Miizy LLM] step={step} intention={intention}")
-                return {"intention": intention, "clarification": clarification}
-        err_body = resp.json() if resp.headers.get("content-type","").startswith("application/json") else {}
-        err_msg = err_body.get("error", {}).get("message", "") if isinstance(err_body, dict) else ""
-        if "credit" in err_msg.lower() or "balance" in err_msg.lower():
-            logger.error(f"[Miizy LLM] Crédit Anthropic insuffisant")
-            raise RuntimeError(f"CREDIT_INSUFFISANT: {err_msg[:120]}")
-        logger.warning(f"[Miizy LLM] API error {resp.status_code}: {err_msg[:80]}")
+        raw = _call_llm(system, user_prompt, max_tokens=100)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if m:
+            parsed = json.loads(m.group())
+            intention = parsed.get("intention", "UNCLEAR").upper()
+            logger.info(f"[Miizy LLM] step={step} intention={intention}")
+            return {"intention": intention, "clarification": parsed.get("clarification") or None}
     except RuntimeError:
         raise
     except Exception as e:
@@ -291,16 +301,7 @@ def _generate_adam_response(
     session: "MiizySession",
     objection_type: str,
 ) -> "Tuple[str, str]":
-    """
-    Génère une réponse humaine style Adam (Miizy) face à une objection.
-    Persona : L'Audace Empathique + Le Pari + Transparence Radicale.
-    Règle tempo : ne jamais fusionner proposition de visio ET proposition de pari.
-    """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        logger.warning("[Miizy][Adam] Pas d'ANTHROPIC_API_KEY — silence")
-        return "", ""
-
+    """Génère une réponse Adam via le LLM configuré (OpenAI ou Anthropic)."""
     history = session.get("history", [])
     hist_str = "\n".join(
         f"{'Prospect' if h['role'] == 'user' else 'Adam'}: {h['content'][:200]}"
@@ -311,108 +312,56 @@ def _generate_adam_response(
     _OBJECTION_GUIDANCE = {
         "pas_interesse": (
             "Reformule UN bénéfice concret de Miizy (ex : 40k lots neufs + version gratuite), "
-            "puis pose une question ouverte sur leur activité actuelle. "
-            "Ne contre-argumente pas directement. Reste détendu."
+            "puis pose une question ouverte sur leur activité actuelle. Ne contre-argumente pas. Reste détendu."
         ),
         "mauvais_moment": (
-            "Accepte le timing avec élégance. "
-            "Demande quand serait le meilleur moment ('La semaine prochaine ? Le mois prochain ?'). "
+            "Accepte le timing avec élégance. Demande quand serait le meilleur moment. "
             "Propose de revenir à la date qu'ils choisissent."
         ),
         "demande_mail": (
-            "Accepte mais réoriente vers l'appel de 5 min : "
-            "'Je peux faire ça, mais franchement un appel de 5 min vous donnera plus qu'un mail de 10 pages.' "
+            "Accepte mais réoriente vers l'appel de 5 min : 'un appel de 5 min vous donnera plus qu'un mail de 10 pages.' "
             "Reste chaleureux, pas insistant."
         ),
         "deja_suivi": (
-            "Valorise leur organisation ('C'est un excellent signe — les meilleurs combinent les outils'). "
-            "Souligne ce que Miizy fait qu'aucun autre ne fait : 40k lots neufs + CRM + version gratuite. "
-            "Propose juste 20 min pour voir si ça complète ce qu'ils ont."
+            "Valorise leur organisation. Souligne ce que Miizy fait qu'aucun autre ne fait : "
+            "40k lots neufs + CRM + version gratuite. Propose 20 min pour voir si ça complète ce qu'ils ont."
         ),
         "inconnu": (
-            "Le message ne rentre dans aucune case connue. Réponds de manière naturelle et humaine "
-            "en t'appuyant sur le contexte de la conversation. Maintiens le fil : "
-            "si le prospect n'a pas encore répondu à la question principale, replonge-y subtilement. "
-            "Sinon, continue la conversation vers le RDV. Reste simple, chaleureux, pas insistant."
+            "Réponds naturellement en t'appuyant sur le contexte. Si le prospect n'a pas encore répondu à la question "
+            "principale, replonge-y subtilement. Sinon, avance vers le RDV. Simple, chaleureux, pas insistant."
         ),
     }
     guidance = _OBJECTION_GUIDANCE.get(objection_type, _OBJECTION_GUIDANCE["inconnu"])
 
     system_prompt = (
-        "Tu es Adam, commercial terrain chez Miizy. Tu relances des professionnels de "
-        "l'immobilier sur WhatsApp.\n\n"
-        "TON PERSONA :\n"
-        "- 'L'Audace Empathique' : tu assumes l'intrusion frontalement "
-        "('Je plaide coupable', 'Je préfère me faire gronder plutôt que de ne pas essayer')\n"
-        "- Transparence radicale : tu parles cash, sans langue de bois\n"
-        "- Phrases courtes, punchy. Max 2 emojis par message (🤝 🎯 🏆 🎁)\n\n"
-        "MIIZY EN 1 LIGNE :\n"
-        "40 000 lots neufs en France + CRM complet + multidiffusion annonces — version gratuite dispo.\n"
-        "Objectif unique : obtenir un RDV de 20 min (visio ou appel).\n\n"
-        "RÈGLE TEMPO ABSOLUE — NE JAMAIS VIOLER :\n"
-        "1. D'abord : propose la visio/appel de 20 min\n"
-        "2. SEULEMENT après confirmation d'intérêt → 'On prend le pari ?' "
-        "(version offerte si pas convaincu)\n"
-        "→ Ne JAMAIS mettre ces 2 éléments dans le même message.\n\n"
-        "STYLE — exemples :\n"
-        "✓ 'Ah d'accord, et vous travaillez sur quel type de biens en ce moment ?'\n"
-        "✓ 'Je plaide coupable — mais 20 min pour voir Miizy, c'est vraiment peu pour ce que ça peut apporter.'\n"
-        "✗ 'Pourriez-vous me préciser votre situation actuelle ?'\n\n"
-        "CONTRAINTE STRICTE : 2-4 phrases max. Jamais de liste à puces. "
-        "Toujours terminer par une question ou une invitation douce vers le RDV."
+        "Tu es Adam, commercial terrain chez Miizy. Tu relances des professionnels de l'immobilier sur WhatsApp.\n"
+        "PERSONA : Audace Empathique — assumes l'intrusion frontalement, parles cash, phrases courtes, max 2 emojis.\n"
+        "MIIZY : 40 000 lots neufs en France + CRM complet + multidiffusion annonces — version gratuite dispo.\n"
+        "OBJECTIF : obtenir un RDV de 20 min (visio ou appel).\n"
+        "RÈGLE ABSOLUE : propose la visio D'ABORD. Jamais fusionner visio + 'pari gratuit' dans le même message.\n"
+        "FORMAT : 2-4 phrases max. Pas de liste. Terminer par une question/invitation RDV."
     )
-
-    prompt = (
+    user_prompt = (
         f"CONVERSATION :\n{hist_str}\n\n"
-        f"NOUVEAU MESSAGE DU PROSPECT : \"{user_msg}\"\n"
-        f"TYPE D'OBJECTION : {objection_type}\n"
-        f"PRÉNOM : {prenom or '(inconnu)'}\n"
-        f"ÉTAPE WORKFLOW : {step}\n\n"
-        f"GUIDANCE SPÉCIFIQUE : {guidance}\n\n"
-        "Génère UNE réponse naturelle en français. 2-4 phrases max. "
-        "Pas de liste. Terminer par une question/invitation RDV."
+        f"NOUVEAU MESSAGE : \"{user_msg}\"\n"
+        f"TYPE : {objection_type} | PRÉNOM : {prenom or '(inconnu)'} | ÉTAPE : {step}\n"
+        f"GUIDANCE : {guidance}\n\n"
+        "Génère UNE réponse en français, 2-4 phrases."
     )
 
     try:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 250,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            reply = resp.json()["content"][0]["text"].strip()
-            try:
-                _track_llm_cost(resp.json().get("usage", {}), "miizy_adam_objection")
-            except Exception:
-                pass
-            logger.info(f"[Miizy][Adam] objection={objection_type} reply={reply[:80]}")
-            session.add_history("assistant", reply)
-            return reply, ""
-        err_body = resp.json() if resp.headers.get("content-type","").startswith("application/json") else {}
-        err_msg = err_body.get("error", {}).get("message", "") if isinstance(err_body, dict) else ""
-        if "credit" in err_msg.lower() or "balance" in err_msg.lower():
-            logger.error(f"[Miizy][Adam] Crédit Anthropic insuffisant — {err_msg[:120]}")
-            raise RuntimeError(f"CREDIT_INSUFFISANT: {err_msg[:120]}")
-        logger.warning(f"[Miizy][Adam] API error {resp.status_code}: {err_msg[:80]}")
+        reply = _call_llm(system_prompt, user_prompt, max_tokens=250)
+        logger.info(f"[Miizy][Adam] objection={objection_type} reply={reply[:80]}")
+        session.add_history("assistant", reply)
+        return reply, ""
     except RuntimeError:
         raise
     except Exception as e:
         logger.warning(f"[Miizy][Adam] Exception: {e}")
 
-    # Fallback de secours : relance douce sans LLM
-    prenom = session.prenom
+    # Fallback de secours sans LLM
     p = f" {prenom}" if prenom else ""
-    fallback = f"Bonne question{p} — je vous réponds dans la journée pour qu'on en discute ensemble. Vous seriez dispo pour un rapide échange cette semaine ?"
+    fallback = f"Bonne question{p} — je vous réponds dans la journée. Vous seriez dispo pour un rapide échange cette semaine ?"
     session.add_history("assistant", fallback)
     return fallback, ""
 

@@ -1169,6 +1169,63 @@ def launch_campaign():
         logger.error(f"Error launching campaign: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+from pathlib import Path as _PathLib
+_CONFIG_FILE = _PathLib('/data/.openclaw/workspace/vianova-agent/config.json')
+
+@app.route('/miizy/api/llm-config', methods=['GET'])
+def miizy_get_llm_config():
+    if not session.get('user_email') or session.get('user_role') not in ('admin', 'daniel'):
+        return jsonify({'error': 'Accès refusé'}), 403
+    llm = CONFIG.get('llm', {})
+    key = llm.get('api_key', '')
+    masked = (key[:8] + '...' + key[-4:]) if len(key) > 12 else ('***' if key else '')
+    return jsonify({'success': True, 'provider': llm.get('provider', 'anthropic'),
+                    'model': llm.get('model', ''), 'api_key_masked': masked,
+                    'api_key_set': bool(key)})
+
+@app.route('/miizy/api/llm-config', methods=['POST'])
+def miizy_save_llm_config():
+    if not session.get('user_email') or session.get('user_role') not in ('admin', 'daniel'):
+        return jsonify({'error': 'Accès refusé'}), 403
+    body = request.get_json() or {}
+    provider = body.get('provider', 'openai').lower()
+    api_key = body.get('api_key', '').strip()
+    model = body.get('model', '').strip()
+    if not provider or not api_key:
+        return jsonify({'error': 'provider et api_key requis'}), 400
+    if not model:
+        model = 'gpt-4o-mini' if provider == 'openai' else 'claude-haiku-4-5-20251001'
+    # Test rapide de la clé
+    try:
+        import requests as _req
+        if provider == 'openai':
+            r = _req.post('https://api.openai.com/v1/chat/completions',
+                headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+                json={'model': model, 'max_tokens': 5, 'messages': [{'role': 'user', 'content': 'hi'}]},
+                timeout=8)
+            ok = r.status_code == 200
+            err = r.json().get('error', {}).get('message', '') if not ok else ''
+        else:
+            r = _req.post('https://api.anthropic.com/v1/messages',
+                headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
+                json={'model': model, 'max_tokens': 5, 'messages': [{'role': 'user', 'content': 'hi'}]},
+                timeout=8)
+            ok = r.status_code == 200
+            err = r.json().get('error', {}).get('message', '') if not ok else ''
+    except Exception as e:
+        return jsonify({'error': f'Erreur réseau: {e}'}), 500
+    if not ok:
+        return jsonify({'error': f'Clé invalide ou quota insuffisant: {err}'}), 400
+    # Sauvegarder dans config.json
+    try:
+        cfg = json.loads(_CONFIG_FILE.read_text())
+        cfg['llm'] = {'provider': provider, 'api_key': api_key, 'model': model}
+        _CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+        CONFIG['llm'] = cfg['llm']
+    except Exception as e:
+        return jsonify({'error': f'Erreur sauvegarde: {e}'}), 500
+    return jsonify({'success': True, 'provider': provider, 'model': model})
+
 @app.route('/miizy/api/commerciaux', methods=['GET'])
 def miizy_get_commerciaux():
     """Retourne la liste des commerciaux Miizy configurés avec leur numéro WhatsApp."""
