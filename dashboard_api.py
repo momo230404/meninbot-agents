@@ -1799,11 +1799,12 @@ def get_conversations():
             conv_stage = ''
             try:
                 if _is_miizy:
-                    # Miizy : stage dans Redis session
-                    raw = redis_client.client.get(f"miizy:session:{phone}")
-                    if raw:
-                        import json as _j
-                        conv_stage = _j.loads(raw).get('step', '')
+                    # Miizy : stage dans fichier session local
+                    try:
+                        from miizy_agent import load_session_file as _lsf
+                        conv_stage = _lsf(phone).get('step', '')
+                    except Exception:
+                        pass
                 else:
                     from pathlib import Path as _P
                     conv_file = _P('/data/.openclaw/workspace/vianova-agent/conversations') / f'{phone}.json'
@@ -1963,24 +1964,23 @@ def get_conversation_messages(jid):
         # --- 2. Récupérer les messages de la mémoire locale (entrée + sortie) ---
         local_messages = []
         if _is_miizy:
-            # Miizy : historique stocké dans Redis miizy:session:{phone}
+            # Miizy : historique stocké dans fichier session local
             try:
-                raw = redis_client.client.get(f"miizy:session:{phone_clean}")
-                if raw:
-                    session_data = json.loads(raw)
-                    for idx, m in enumerate(session_data.get('history', [])):
-                        role = m.get('role', '')
-                        local_messages.append({
-                            'id': f"miizy_{phone_clean}_{idx}",
-                            'fromMe': role == 'assistant',
-                            'text': m.get('content', ''),
-                            'timestamp': 0,
-                            'status': '',
-                            'type': 'conversation',
-                            '_local': True,
-                        })
+                from miizy_agent import load_session_file as _lsf2
+                session_data = _lsf2(phone_clean)
+                for idx, m in enumerate(session_data.get('history', [])):
+                    role = m.get('role', '')
+                    local_messages.append({
+                        'id': f"miizy_{phone_clean}_{idx}",
+                        'fromMe': role == 'assistant',
+                        'text': m.get('content', ''),
+                        'timestamp': 0,
+                        'status': '',
+                        'type': 'conversation',
+                        '_local': True,
+                    })
             except Exception as e:
-                logger.warning(f"Miizy Redis session read error: {e}")
+                logger.warning(f"Miizy session file read error: {e}")
             # Charger aussi les messages manuels (commercial + prospect quand bot pausé)
             try:
                 manual_raw = redis_client.client.get(f"miizy:manual:{phone_clean}")
@@ -2192,8 +2192,13 @@ def delete_conversation(phone):
     # 3. Supprimer toutes les clés Redis de conversation (PAS le lead)
     try:
         redis_client.client.delete(f"conv:{phone_clean}")
-        redis_client.client.delete(f"miizy:session:{phone_clean}")
         deleted.append(f"redis:conv:{phone_clean}")
+        try:
+            from miizy_agent import delete_session_file as _dsf
+            _dsf(phone_clean)
+            deleted.append(f"session_file:{phone_clean}")
+        except Exception:
+            pass
     except Exception as e:
         errors.append(f"redis: {e}")
 
@@ -3624,7 +3629,8 @@ def miizy_training_reset():
         return jsonify({'error': 'Accès refusé'}), 403
     try:
         try:
-            redis_client.client.delete(f"miizy:session:{MIIZY_TRAINING_PHONE}")
+            from miizy_agent import delete_session_file as _dsf_train
+            _dsf_train(MIIZY_TRAINING_PHONE)
         except Exception:
             pass
         return jsonify({'ok': True, 'message': 'Session réinitialisée'})

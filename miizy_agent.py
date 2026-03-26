@@ -392,38 +392,82 @@ def _track_llm_cost(usage: dict, label: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SESSION REDIS
+# SESSION FICHIER (remplace Redis)
 # ══════════════════════════════════════════════════════════════════════════════
 
+_SESSIONS_DIR = Path(__file__).parent / "miizy_sessions"
+_SESSIONS_DIR.mkdir(exist_ok=True)
+SESSION_TTL_DAYS = 7
+
+# Déduplication messages en mémoire (remplace Redis miizy:msgid:*)
+_MSG_DEDUP: dict = {}
+
+def _check_dedup(msg_id: str) -> bool:
+    """Retourne True si message déjà traité (doublon)."""
+    if not msg_id:
+        return False
+    now = datetime.now().timestamp()
+    expired = [k for k, t in list(_MSG_DEDUP.items()) if now - t > 120]
+    for k in expired:
+        _MSG_DEDUP.pop(k, None)
+    if msg_id in _MSG_DEDUP:
+        return True
+    _MSG_DEDUP[msg_id] = now
+    return False
+
+
+def load_session_file(phone: str) -> dict:
+    """Charge la session depuis le fichier JSON. Retourne le dict de données."""
+    f = _SESSIONS_DIR / f"{phone}.json"
+    try:
+        if f.exists():
+            data = json.loads(f.read_text(encoding="utf-8"))
+            last = data.get("last_updated", "")
+            if last:
+                delta = datetime.now() - datetime.fromisoformat(last)
+                if delta.days >= SESSION_TTL_DAYS:
+                    logger.info(f"[MiizySession] Session expirée ({phone}) — reset")
+                    f.unlink(missing_ok=True)
+                    return _default_session(phone)
+            return data
+    except Exception as e:
+        logger.warning(f"[MiizySession] Lecture {phone}: {e}")
+    return _default_session(phone)
+
+
+def save_session_file(phone: str, data: dict):
+    """Sauvegarde la session dans le fichier JSON."""
+    f = _SESSIONS_DIR / f"{phone}.json"
+    try:
+        data["last_updated"] = datetime.now().isoformat()
+        f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"[MiizySession] Écriture {phone}: {e}")
+
+
+def delete_session_file(phone: str):
+    """Supprime le fichier de session (reset conversation)."""
+    f = _SESSIONS_DIR / f"{phone}.json"
+    try:
+        f.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _default_session(phone: str) -> dict:
+    return {"phone": phone, "prenom": "", "step": "WAITING_NEUF_ANCIEN",
+            "branch": None, "history": [], "last_updated": datetime.now().isoformat()}
+
+
 class MiizySession:
-    """Gère la session Redis pour un prospect Miizy (clé miizy:session:{phone})."""
+    """Gère la session d'un prospect Miizy via fichier JSON local."""
 
-    def __init__(self, phone: str, redis_client):
+    def __init__(self, phone: str, redis_client=None):  # redis_client ignoré (compat)
         self.phone = phone
-        self.redis = redis_client
-        self.key = f"miizy:session:{phone}"
-        self.data = self._load()
-
-    def _load(self) -> dict:
-        try:
-            raw = self.redis.get(self.key)
-            if raw:
-                return json.loads(raw)
-        except Exception:
-            pass
-        return {
-            "phone": self.phone,
-            "prenom": "",
-            "step": "WAITING_NEUF_ANCIEN",
-            "branch": None,
-            "history": [],
-        }
+        self.data = load_session_file(phone)
 
     def save(self):
-        try:
-            self.redis.setex(self.key, SESSION_TTL, json.dumps(self.data))
-        except Exception as e:
-            logger.warning(f"[MiizySession] Redis save failed for {self.phone}: {e}")
+        save_session_file(self.phone, self.data)
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -524,15 +568,9 @@ class MiizyAgent:
         """Traite un message entrant. Retourne (reply, "")."""
 
         # Anti-doublon msg_id
-        if msg_id:
-            dup_key = f"miizy:msgid:{msg_id}"
-            try:
-                if self.session.redis.exists(dup_key):
-                    logger.info(f"[Miizy] doublon msg_id={msg_id} ignoré")
-                    return "", ""
-                self.session.redis.setex(dup_key, 120, "1")
-            except Exception:
-                pass
+        if _check_dedup(msg_id):
+            logger.info(f"[Miizy] doublon msg_id={msg_id} ignoré")
+            return "", ""
 
         txt = text.strip()
         step = self.session.step
