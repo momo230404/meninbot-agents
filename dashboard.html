@@ -5224,19 +5224,28 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
                 if (data.error) {
                     box.appendChild(_miizyTrainingSystemMsg('❌ Erreur: ' + data.error, '#e53e3e'));
                 } else if (data.response) {
-                    const responseLen = (data.response || '').length;
-                    const delay = Math.min(5000, Math.max(1500, responseLen * 35));
+                    // Splitter en plusieurs bulles comme le fait l'agent en vrai
+                    const parts = data.response.trim().split(/(?<=[.!?])\s+/).filter(p => p.trim());
+                    const maxParts = 3;
+                    let msgParts = parts;
+                    if (parts.length > maxParts) {
+                        msgParts = [...parts.slice(0, maxParts - 1), parts.slice(maxParts - 1).join(' ')];
+                    }
 
-                    const typing2 = document.createElement('div');
-                    typing2.style.cssText = 'display:flex;align-items:center;gap:4px;padding:10px 14px;background:#fff;border-radius:4px 16px 16px 16px;max-width:80px;box-shadow:0 1px 3px rgba(0,0,0,0.08);';
-                    typing2.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
-                    box.appendChild(typing2);
-                    _miizyScrollBottom();
-                    await new Promise(r => setTimeout(r, delay));
-                    typing2.remove();
-
-                    box.appendChild(_miizyTrainingBubble('assistant', data.response));
-                    _miizyScrollBottom();
+                    for (let pi = 0; pi < msgParts.length; pi++) {
+                        const part = msgParts[pi].trim();
+                        if (!part) continue;
+                        const typingEl = document.createElement('div');
+                        typingEl.style.cssText = 'display:flex;align-items:center;gap:4px;padding:10px 14px;background:#fff;border-radius:4px 16px 16px 16px;max-width:80px;box-shadow:0 1px 3px rgba(0,0,0,0.08);';
+                        typingEl.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+                        box.appendChild(typingEl);
+                        _miizyScrollBottom();
+                        const delay = Math.min(4000, Math.max(1000, part.length * 30));
+                        await new Promise(r => setTimeout(r, delay));
+                        typingEl.remove();
+                        box.appendChild(_miizyTrainingBubble('assistant', part));
+                        _miizyScrollBottom();
+                    }
                 } else {
                     box.appendChild(_miizyTrainingSystemMsg('⏸️ Aucune réponse (conversation terminée ou fermée)', '#a0aec0'));
                 }
