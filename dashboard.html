@@ -797,11 +797,10 @@
                 <div class="miizy-commercial-frame">
                     <span class="miizy-commercial-frame-label" id="commercial-frame-label">Espace de Adam (IA)</span>
 
-                    <!-- Pills de sélection -->
-                    <div class="miizy-pills-row" id="miizy-pills-row">
-                        <button class="miizy-pill active" data-commercial="adam" onclick="selectCommercial('adam')">Adam (IA)</button>
-                        <!-- Autres commerciaux injectés par JS -->
-                    </div>
+                    <!-- Sélecteur commercial dropdown -->
+                    <select id="commercial-dropdown" onchange="selectCommercial(this.value)" style="width:100%;margin-bottom:8px;padding:7px 10px;border-radius:8px;border:1.5px solid rgba(0,212,255,0.35);background:rgba(0,0,0,0.35);color:#e2e8f0;font-size:13px;font-weight:600;cursor:pointer;outline:none;">
+                        <option value="adam">Adam (IA)</option>
+                    </select>
 
                     <!-- Onglets commercial -->
                     <ul class="nav" style="margin:0;">
@@ -2968,28 +2967,37 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
                 if (!data.success) return;
                 _miizyCommerciaux = data.commerciaux || [];
 
-                // Helper pour créer une pill commerciaux
+                // Helper : label commercial avec numéro si dispo
+                function _commLabel(c) {
+                    const name = c.id === 'adam' ? 'Adam (IA)' : c.name;
+                    return c.phone ? `${name} — ${c.phone}` : name;
+                }
+
+                // Helper pour créer une pill commerciaux (campagne / import)
                 function _makeCommercialPill(c, activeId, onClickFn, containerId) {
                     const btn = document.createElement('button');
                     btn.className = 'miizy-pill' + (c.id === activeId ? ' active' : '');
                     btn.dataset.commercial = c.id;
                     btn.dataset.container = containerId;
-                    const label = c.id === 'adam' ? 'Adam (IA)' : c.name;
-                    const phoneStr = c.phone ? `\n${c.phone}` : '';
-                    btn.innerHTML = `<span style="display:flex;flex-direction:column;align-items:center;line-height:1.2;">`
-                        + `<span style="font-weight:600;">${label}</span>`
-                        + (c.phone ? `<span style="font-size:10px;opacity:0.75;">${c.phone}</span>` : '')
+                    const name = c.id === 'adam' ? 'Adam (IA)' : c.name;
+                    btn.innerHTML = `<span style="display:flex;flex-direction:column;align-items:center;line-height:1.3;">`
+                        + `<span style="font-weight:700;">${name}</span>`
+                        + (c.phone ? `<span style="font-size:10px;opacity:0.78;font-weight:400;">${c.phone}</span>` : '')
                         + `</span>`;
-                    btn.onclick = () => onClickFn(c.id, containerId);
+                    btn.onclick = () => onClickFn(c.id);
                     return btn;
                 }
 
-                // Peupler les pills du cadre admin (sidebar)
-                const pillsRow = document.getElementById('miizy-pills-row');
-                if (pillsRow) {
-                    pillsRow.innerHTML = '';
+                // Peupler le dropdown sidebar
+                const dropdown = document.getElementById('commercial-dropdown');
+                if (dropdown) {
+                    dropdown.innerHTML = '';
                     _miizyCommerciaux.forEach(c => {
-                        pillsRow.appendChild(_makeCommercialPill(c, _activeCommercial, (id) => selectCommercial(id), 'sidebar'));
+                        const opt = document.createElement('option');
+                        opt.value = c.id;
+                        opt.textContent = _commLabel(c);
+                        if (c.id === _activeCommercial) opt.selected = true;
+                        dropdown.appendChild(opt);
                     });
                 }
 
@@ -2999,11 +3007,10 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
                     campPills.innerHTML = '';
                     _miizyCommerciaux.forEach(c => {
                         campPills.appendChild(_makeCommercialPill(c, _activeCommercial, (id) => {
-                            campOnCommercialChange(id === 'adam' ? '' : id);
-                            // Sync sidebar & import pills
                             document.querySelectorAll('[data-container="camp-pills"]').forEach(p => {
                                 p.classList.toggle('active', p.dataset.commercial === id);
                             });
+                            campOnCommercialChange(id === 'adam' ? '' : id);
                         }, 'camp-pills'));
                     });
                 }
@@ -3039,10 +3046,9 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
         async function selectCommercial(commercialId) {
             _activeCommercial = commercialId || 'adam';
 
-            // Mettre à jour les pills
-            document.querySelectorAll('.miizy-pill').forEach(pill => {
-                pill.classList.toggle('active', pill.dataset.commercial === _activeCommercial);
-            });
+            // Sync le dropdown sidebar
+            const dropdown = document.getElementById('commercial-dropdown');
+            if (dropdown) dropdown.value = _activeCommercial;
 
             // Mettre à jour le label du cadre
             const labelEl = document.getElementById('commercial-frame-label');

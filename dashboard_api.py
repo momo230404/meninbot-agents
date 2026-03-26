@@ -1177,19 +1177,32 @@ def miizy_get_commerciaux():
     commerciaux = []
     for comm_id, cfg in CONFIG.get('miizy_commerciaux', {}).items():
         phone = cfg.get('phone', '')
-        # Tenter de récupérer le numéro depuis l'état de connexion Evolution API
+        # Tenter de récupérer le numéro depuis Evolution API
         if not phone:
             try:
                 evo = _get_commercial_evo(comm_id)
                 if evo:
                     import requests as _req
-                    url = f"{evo.base_url}/instance/connectionState/{evo.instance_name}"
-                    r = _req.get(url, headers={"apikey": evo.api_key}, timeout=5)
+                    hdrs = {"apikey": evo.api_key}
+                    # Essai 1 : connectionState
+                    r = _req.get(f"{evo.base_url}/instance/connectionState/{evo.instance_name}", headers=hdrs, timeout=5)
                     if r.status_code == 200:
                         rj = r.json()
                         owner = rj.get('instance', {}).get('owner', '') or rj.get('owner', '')
                         if owner:
                             phone = '+' + owner.split('@')[0] if '@' in owner else owner
+                    # Essai 2 : fetchInstances (retourne owner direct)
+                    if not phone:
+                        r2 = _req.get(f"{evo.base_url}/instance/fetchInstances", headers=hdrs, timeout=5)
+                        if r2.status_code == 200:
+                            instances = r2.json()
+                            if isinstance(instances, list):
+                                for inst in instances:
+                                    if inst.get('instance', {}).get('instanceName') == evo.instance_name:
+                                        owner = inst.get('instance', {}).get('owner', '')
+                                        if owner:
+                                            phone = '+' + owner.split('@')[0] if '@' in owner else owner
+                                        break
             except Exception:
                 pass
         commerciaux.append({'id': comm_id, 'name': cfg.get('name', comm_id), 'phone': phone})
