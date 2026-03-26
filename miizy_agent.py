@@ -92,6 +92,11 @@ def _normalize(txt: str) -> str:
 def detect_branch(txt: str) -> Optional[str]:
     """Détecte NEUF (→ A) ou ANCIEN (→ B). Retourne 'A', 'B' ou None."""
     t = _normalize(txt)
+    # Si c'est une question (ex: "Vous travaillez sur du neuf ?"), ce n'est pas une réponse → None
+    if txt.strip().endswith("?"):
+        return None
+    if re.search(r"^\s*(vous\s+travaillez|vous\s+faites|vous\s+[eê]tes|est[\s-]ce\s+que|quel|qu[''']est)", t):
+        return None
     # Neuf OU mixte → branche A
     if re.search(
         r"\b(neuf|les deux|les 2|mixte|nouveau|nouvelle construction|vefa|"
@@ -448,7 +453,10 @@ class MiizySession:
         }
 
     def save(self):
-        self.redis.setex(self.key, SESSION_TTL, json.dumps(self.data))
+        try:
+            self.redis.setex(self.key, SESSION_TTL, json.dumps(self.data))
+        except Exception as e:
+            logger.warning(f"[MiizySession] Redis save failed for {self.phone}: {e}")
 
     def get(self, key, default=None):
         return self.data.get(key, default)

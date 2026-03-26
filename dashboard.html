@@ -3398,9 +3398,16 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
                 if (total > 0) { b.textContent = total; b.style.display = 'inline'; }
                 else b.style.display = 'none';
             });
-            // Renommer Daniel → Mohamed sur Miizy
+            // Renommer l'onglet commercial selon le contexte
             const humanLabel = document.getElementById('conv-tab-human-label');
-            if (humanLabel) humanLabel.textContent = CURRENT_AGENT === 'miizy' ? 'Mohamed' : 'Daniel';
+            if (humanLabel) {
+                if (CURRENT_AGENT === 'miizy') {
+                    const activeComm = _miizyCommerciaux.find(x => x.id === _activeCommercial);
+                    humanLabel.textContent = activeComm ? activeComm.name : 'Commercial';
+                } else {
+                    humanLabel.textContent = 'Daniel';
+                }
+            }
 
             // Badge Daniel/Mohamed (paused non vus)
             const danielConvs = convListData.filter(c => c.agent_paused);
