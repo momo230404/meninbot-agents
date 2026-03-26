@@ -1685,7 +1685,18 @@ def get_conversations():
     try:
         import requests as req
         _is_miizy = '/miizy/' in request.path
-        _evo = _miizy_evo_cfg if _is_miizy else CONFIG['evolution_api']
+        if _is_miizy:
+            commercial_id = request.args.get('commercial_id') or 'adam'
+            _comm_cfg = CONFIG.get('miizy_commerciaux', {}).get(commercial_id, {})
+            _evo_obj = _get_commercial_evo(commercial_id)
+            _evo = {
+                'api_key': _comm_cfg.get('api_key', _miizy_evo_cfg['api_key']),
+                'instance_name': _comm_cfg.get('instance_name', _miizy_evo_cfg['instance_name']),
+                'base_url': _comm_cfg.get('base_url', _miizy_evo_cfg['base_url']),
+            }
+        else:
+            commercial_id = None
+            _evo = CONFIG['evolution_api']
         headers = {
             'apikey': _evo['api_key'],
             'Content-Type': 'application/json'
@@ -1772,6 +1783,7 @@ def get_conversations():
         lead_states = {}
         lead_ai_enabled = {}
         lead_humain_depuis = {}
+        lead_commercial = {}  # phone → commercial_id
         for l in all_leads:
             if not isinstance(l, dict):
                 continue
@@ -1781,13 +1793,15 @@ def get_conversations():
                     lead_phones.add(p)
                     lead_states[p] = l.get('state', '')
                     lead_ai_enabled[p] = l.get('ai_enabled', True)
+                    lead_commercial[p] = l.get('commercial_id', 'adam') or 'adam'
                     if l.get('agent_humain_depuis'):
                         lead_humain_depuis[p] = l['agent_humain_depuis']
 
         hidden = _load_hidden()
         if _is_miizy:
-            # Miizy : montrer TOUTES les conversations Evolution API sans filtre leads
-            conversations = [c for c in conversations if c['phone'] not in hidden]
+            # Filtrer par commercial_id : seuls les leads assignés à ce commercial
+            filtered_lead_phones = {p for p, cid in lead_commercial.items() if cid == commercial_id}
+            conversations = [c for c in conversations if c['phone'] in filtered_lead_phones and c['phone'] not in hidden]
         else:
             # Vianova : filtrer uniquement les leads connus
             if lead_phones:
@@ -1800,6 +1814,7 @@ def get_conversations():
             p = c['phone']
             c['agent_paused'] = (lead_states.get(p, '') == 'pause') or (not lead_ai_enabled.get(p, True))
             c['agent_humain_depuis'] = lead_humain_depuis.get(p)
+            c['commercial_id'] = lead_commercial.get(p, 'adam') if _is_miizy else None
             # Miizy : remplacer le step interne par le vrai état du lead
             if _is_miizy and lead_states.get(p):
                 c['stage'] = lead_states[p]
