@@ -2031,7 +2031,7 @@
 
             // Restaurer la dernière section visitée
             const _savedSection = localStorage.getItem('lastSection_' + CURRENT_AGENT);
-            const _validSections = ['leads','campaigns','conversations','agenda','templates','stats','agent','couts','comptes'];
+            const _validSections = ['leads','campaigns','conversations','agenda','templates','stats','agent','couts','comptes','training','miizy-training','llm-config'];
             if (_savedSection && _validSections.includes(_savedSection)) {
                 switchSection(_savedSection);
             } else {
