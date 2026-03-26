@@ -859,10 +859,9 @@
                             <h2>👥 Gestion des Leads</h2>
                             <div style="display: flex; gap: 10px; align-items:center; flex-wrap:wrap;">
                                 <!-- Sélecteur commercial import (admin Miizy uniquement) -->
-                                <div id="import-commercial-block" style="display:none;">
-                                    <select id="import-commercial-select" style="padding:8px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;background:#f8fafc;" title="Assigner ces leads à un commercial">
-                                        <option value="">Adam (défaut)</option>
-                                    </select>
+                                <div id="import-commercial-block" style="display:none;align-items:center;gap:6px;flex-wrap:wrap;">
+                                    <span style="font-size:12px;font-weight:600;color:#4a5568;">Via :</span>
+                                    <div id="import-commercial-pills" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
                                 </div>
                                 <label class="file-label">
                                     📥 Importer CSV
@@ -1310,10 +1309,8 @@
                                 <!-- Sélecteur commercial (admin Miizy uniquement) -->
                                 <div id="camp-commercial-block" style="display:none;margin-bottom:14px;">
                                     <label style="font-size:12px;font-weight:600;color:#4a5568;display:block;margin-bottom:6px;">📱 Envoyer via le numéro de :</label>
-                                    <select id="camp-commercial-select" onchange="campOnCommercialChange(this.value)" style="width:100%;padding:8px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;background:#f8fafc;">
-                                        <option value="">Adam (IA — défaut)</option>
-                                    </select>
-                                    <div id="camp-commercial-info" style="margin-top:6px;font-size:11px;color:#718096;"></div>
+                                    <div id="camp-commercial-pills" class="miizy-pills-row" style="margin-bottom:6px;"></div>
+                                    <div id="camp-commercial-info" style="margin-top:4px;font-size:11px;color:#718096;"></div>
                                 </div>
 
                                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:14px 0 16px;font-size:13px;color:#4a5568;">
@@ -2892,10 +2889,14 @@
 
         async function saveImportedLeads(leadsToImport) {
             try {
+                const _importPill = document.querySelector('[data-container="import-pills"].active');
+                const _importCommercialId = (_importPill && _importPill.dataset.commercial !== 'adam') ? _importPill.dataset.commercial : '';
+                const body = { leads: leadsToImport };
+                if (_importCommercialId) body.commercial_id = _importCommercialId;
                 const res = await fetch(`${API_URL}/leads/import`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ leads: leadsToImport })
+                    body: JSON.stringify(body)
                 });
 
                 const data = await res.json();
@@ -2967,36 +2968,68 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
                 if (!data.success) return;
                 _miizyCommerciaux = data.commerciaux || [];
 
-                // Peupler les pills du cadre admin
+                // Helper pour créer une pill commerciaux
+                function _makeCommercialPill(c, activeId, onClickFn, containerId) {
+                    const btn = document.createElement('button');
+                    btn.className = 'miizy-pill' + (c.id === activeId ? ' active' : '');
+                    btn.dataset.commercial = c.id;
+                    btn.dataset.container = containerId;
+                    const label = c.id === 'adam' ? 'Adam (IA)' : c.name;
+                    const phoneStr = c.phone ? `\n${c.phone}` : '';
+                    btn.innerHTML = `<span style="display:flex;flex-direction:column;align-items:center;line-height:1.2;">`
+                        + `<span style="font-weight:600;">${label}</span>`
+                        + (c.phone ? `<span style="font-size:10px;opacity:0.75;">${c.phone}</span>` : '')
+                        + `</span>`;
+                    btn.onclick = () => onClickFn(c.id, containerId);
+                    return btn;
+                }
+
+                // Peupler les pills du cadre admin (sidebar)
                 const pillsRow = document.getElementById('miizy-pills-row');
                 if (pillsRow) {
                     pillsRow.innerHTML = '';
                     _miizyCommerciaux.forEach(c => {
-                        const btn = document.createElement('button');
-                        btn.className = 'miizy-pill' + (c.id === _activeCommercial ? ' active' : '');
-                        btn.dataset.commercial = c.id;
-                        btn.textContent = c.id === 'adam' ? 'Adam (IA)' : c.name;
-                        btn.onclick = () => selectCommercial(c.id);
-                        pillsRow.appendChild(btn);
+                        pillsRow.appendChild(_makeCommercialPill(c, _activeCommercial, (id) => selectCommercial(id), 'sidebar'));
                     });
                 }
 
-                // Remplir le sélecteur campagne (panneau droit)
-                const campSel = document.getElementById('camp-commercial-select');
-                const importSel = document.getElementById('import-commercial-select');
-                [campSel, importSel].forEach(sel => {
-                    if (!sel) return;
-                    sel.innerHTML = '<option value="">Adam (IA — défaut)</option>';
-                    _miizyCommerciaux.filter(c => c.id !== 'adam').forEach(c => {
-                        sel.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+                // Peupler les pills du panneau campagne
+                const campPills = document.getElementById('camp-commercial-pills');
+                if (campPills) {
+                    campPills.innerHTML = '';
+                    _miizyCommerciaux.forEach(c => {
+                        campPills.appendChild(_makeCommercialPill(c, _activeCommercial, (id) => {
+                            campOnCommercialChange(id === 'adam' ? '' : id);
+                            // Sync sidebar & import pills
+                            document.querySelectorAll('[data-container="camp-pills"]').forEach(p => {
+                                p.classList.toggle('active', p.dataset.commercial === id);
+                            });
+                        }, 'camp-pills'));
                     });
-                });
+                }
+
+                // Peupler les pills du panneau import
+                let _activeImportCommercial = _activeCommercial;
+                const importPills = document.getElementById('import-commercial-pills');
+                if (importPills) {
+                    importPills.innerHTML = '';
+                    _miizyCommerciaux.forEach(c => {
+                        importPills.appendChild(_makeCommercialPill(c, _activeCommercial, (id) => {
+                            _activeImportCommercial = id;
+                            document.querySelectorAll('[data-container="import-pills"]').forEach(p => {
+                                p.classList.toggle('active', p.dataset.commercial === id);
+                            });
+                        }, 'import-pills'));
+                    });
+                }
+                // Exposer _activeImportCommercial globalement
+                window._getImportCommercial = () => _activeImportCommercial;
 
                 // Afficher les blocs de sélecteur dans campagne/import
                 const campBlock = document.getElementById('camp-commercial-block');
                 const importBlock = document.getElementById('import-commercial-block');
                 if (campBlock) campBlock.style.display = 'block';
-                if (importBlock) importBlock.style.display = 'block';
+                if (importBlock) importBlock.style.display = 'flex';
 
             } catch(e) {
                 console.warn('loadMiizyCommerciaux error:', e);
@@ -3018,9 +3051,13 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
                 labelEl.textContent = `Espace de ${c ? c.name : 'Adam (IA)'}`;
             }
 
-            // Synchroniser le sélecteur dans la section campagne
-            const campSel = document.getElementById('camp-commercial-select');
-            if (campSel) campSel.value = _activeCommercial === 'adam' ? '' : _activeCommercial;
+            // Synchroniser les pills campagne et import
+            document.querySelectorAll('[data-container="camp-pills"]').forEach(p => {
+                p.classList.toggle('active', p.dataset.commercial === _activeCommercial);
+            });
+            document.querySelectorAll('[data-container="import-pills"]').forEach(p => {
+                p.classList.toggle('active', p.dataset.commercial === _activeCommercial);
+            });
             campOnCommercialChange(_activeCommercial === 'adam' ? '' : _activeCommercial, false);
 
             // Recharger les leads filtrés
@@ -3043,9 +3080,9 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
                     info.textContent = c ? `Messages envoyés depuis le numéro WhatsApp de ${c.name}` : '';
                 }
             }
-            // Mettre à jour la pill correspondante
-            document.querySelectorAll('.miizy-pill').forEach(pill => {
-                const target = commercialId || 'adam';
+            // Mettre à jour les pills campagne uniquement
+            const target = commercialId || 'adam';
+            document.querySelectorAll('[data-container="camp-pills"]').forEach(pill => {
                 pill.classList.toggle('active', pill.dataset.commercial === target);
             });
             if (reloadLeads) loadLeads(commercialId || null);
@@ -3203,7 +3240,8 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
 
             // ── Mode Miizy : campagne background (non bloquante) ──
             if (CURRENT_AGENT === 'miizy' && !isDryRun) {
-                const commercialId = (document.getElementById('camp-commercial-select') || {}).value || '';
+                const _activeCampPill = document.querySelector('[data-container="camp-pills"].active');
+                const commercialId = (_activeCampPill && _activeCampPill.dataset.commercial !== 'adam') ? _activeCampPill.dataset.commercial : '';
                 const commercialName = commercialId
                     ? (_miizyCommerciaux.find(c => c.id === commercialId) || {}).name || commercialId
                     : 'Adam (IA)';

@@ -1171,12 +1171,28 @@ def launch_campaign():
 
 @app.route('/miizy/api/commerciaux', methods=['GET'])
 def miizy_get_commerciaux():
-    """Retourne la liste des commerciaux Miizy configurés."""
+    """Retourne la liste des commerciaux Miizy configurés avec leur numéro WhatsApp."""
     if not session.get('user_email'):
         return jsonify({'error': 'Non authentifié'}), 401
     commerciaux = []
     for comm_id, cfg in CONFIG.get('miizy_commerciaux', {}).items():
-        commerciaux.append({'id': comm_id, 'name': cfg.get('name', comm_id)})
+        phone = cfg.get('phone', '')
+        # Tenter de récupérer le numéro depuis l'état de connexion Evolution API
+        if not phone:
+            try:
+                evo = _get_commercial_evo(comm_id)
+                if evo:
+                    import requests as _req
+                    url = f"{evo.base_url}/instance/connectionState/{evo.instance_name}"
+                    r = _req.get(url, headers={"apikey": evo.api_key}, timeout=5)
+                    if r.status_code == 200:
+                        rj = r.json()
+                        owner = rj.get('instance', {}).get('owner', '') or rj.get('owner', '')
+                        if owner:
+                            phone = '+' + owner.split('@')[0] if '@' in owner else owner
+            except Exception:
+                pass
+        commerciaux.append({'id': comm_id, 'name': cfg.get('name', comm_id), 'phone': phone})
     return jsonify({'success': True, 'commerciaux': commerciaux})
 
 
