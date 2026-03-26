@@ -32,6 +32,67 @@
             box-shadow: 2px 0 10px rgba(0,0,0,0.1);
         }
 
+        /* ── Commercial frame (admin Miizy) ─────────────────── */
+        .miizy-commercial-frame {
+            border: 1.5px solid rgba(0, 212, 255, 0.28);
+            border-radius: 12px;
+            padding: 14px 8px 8px;
+            margin: 0 0 10px;
+            background: rgba(0, 212, 255, 0.04);
+            position: relative;
+        }
+        .miizy-commercial-frame-label {
+            position: absolute;
+            top: -9px;
+            left: 12px;
+            font-size: 9px;
+            font-weight: 800;
+            color: rgba(0, 212, 255, 0.8);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            background: #0c2b52;
+            padding: 0 7px;
+            border-radius: 4px;
+        }
+        .miizy-pills-row {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 10px;
+            padding: 0 2px;
+        }
+        .miizy-pill {
+            flex: 1;
+            padding: 5px 3px;
+            border-radius: 7px;
+            font-size: 11px;
+            font-weight: 600;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: transparent;
+            color: rgba(255,255,255,0.45);
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.18s;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .miizy-pill:hover { border-color: rgba(0,212,255,0.45); color: rgba(255,255,255,0.85); }
+        .miizy-pill.active {
+            background: linear-gradient(135deg, #0077b6, #00b4d8);
+            color: white;
+            border-color: transparent;
+            box-shadow: 0 2px 8px rgba(0,180,216,0.35);
+        }
+        .miizy-global-sep {
+            display: block;
+            font-size: 9px;
+            font-weight: 800;
+            color: rgba(255,255,255,0.22);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            padding: 10px 12px 6px;
+        }
+
         .logo {
             font-size: 24px;
             font-weight: 800;
@@ -714,7 +775,9 @@
             </select>
             <!-- Badge admin (affiché si role=admin) -->
             <div id="admin-badge" style="display:none;background:linear-gradient(135deg,#f6ad55,#ed8936);color:white;padding:5px 12px;border-radius:8px;font-size:11px;font-weight:700;text-align:center;margin-bottom:8px;">🔐 COMPTE ADMINISTRATEUR</div>
-            <ul class="nav">
+
+            <!-- ── Nav standard (Vianova + comptes commerciaux Miizy) ── -->
+            <ul class="nav" id="nav-standard">
                 <li><a href="#" data-section="leads" class="nav-link active">👥 Leads</a></li>
                 <li class="nav-admin-only"><a href="#" data-section="campaigns" class="nav-link">🚀 Campagnes</a></li>
                 <li><a href="#" data-section="conversations" class="nav-link">💬 Conversations <span id="nav-conv-count" style="background:rgba(0,212,255,0.25);color:#00d4ff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;margin-left:4px;display:none;"></span></a></li>
@@ -726,6 +789,44 @@
                 <li class="nav-admin-only" id="nav-training-item"><a href="#" data-section="training" class="nav-link">🎯 Entraînement</a></li>
                 <li id="nav-comptes-item" style="display:none"><a href="#" data-section="comptes" class="nav-link">👤 Comptes</a></li>
             </ul>
+
+            <!-- ── Nav admin Miizy (commercial frame + global) ── -->
+            <div id="nav-miizy-admin" style="display:none;">
+
+                <!-- Cadre commercial -->
+                <div class="miizy-commercial-frame">
+                    <span class="miizy-commercial-frame-label" id="commercial-frame-label">Espace de Adam (IA)</span>
+
+                    <!-- Pills de sélection -->
+                    <div class="miizy-pills-row" id="miizy-pills-row">
+                        <button class="miizy-pill active" data-commercial="adam" onclick="selectCommercial('adam')">Adam (IA)</button>
+                        <!-- Autres commerciaux injectés par JS -->
+                    </div>
+
+                    <!-- Onglets commercial -->
+                    <ul class="nav" style="margin:0;">
+                        <li><a href="#" data-section="leads" class="nav-link active">👥 Leads</a></li>
+                        <li><a href="#" data-section="campaigns" class="nav-link">🚀 Campagnes</a></li>
+                        <li><a href="#" data-section="conversations" class="nav-link">💬 Conversations
+                            <span id="nav-conv-count-admin" style="background:rgba(0,212,255,0.25);color:#00d4ff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;margin-left:4px;display:none;"></span>
+                        </a></li>
+                        <li><a href="#" data-section="agenda" class="nav-link">📅 Agenda
+                            <span id="nav-rdv-count-admin" style="background:rgba(0,212,255,0.25);color:#00d4ff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;margin-left:4px;display:none;"></span>
+                        </a></li>
+                        <li><a href="#" data-section="stats" class="nav-link">📊 Statistiques</a></li>
+                    </ul>
+                </div>
+
+                <!-- Section globale -->
+                <span class="miizy-global-sep">Global</span>
+                <ul class="nav" style="margin:0;">
+                    <li><a href="#" data-section="templates" class="nav-link">📝 Templates</a></li>
+                    <li><a href="#" data-section="agent" class="nav-link">🧠 Agent</a></li>
+                    <li><a href="#" data-section="couts" class="nav-link">💰 Coûts IA</a></li>
+                    <li id="nav-training-item-admin"><a href="#" data-section="training" class="nav-link">🎯 Entraînement</a></li>
+                    <li id="nav-comptes-item-admin" style="display:none"><a href="#" data-section="comptes" class="nav-link">👤 Comptes</a></li>
+                </ul>
+            </div>
             <!-- Statut Google Calendar -->
             <div style="margin-top:40px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.1);">
                 <div id="cal-status-block" style="font-size:12px;color:rgba(255,255,255,0.6);display:flex;align-items:center;gap:6px;cursor:pointer;" onclick="showSection('agenda')">
@@ -1822,8 +1923,11 @@
                 if (meRes.ok) {
                     window.CURRENT_USER = await meRes.json();
                     const role = window.CURRENT_USER.role;
-                    // Charger commerciaux si admin Miizy (pour import + campagnes)
+
+                    // ── Nav admin Miizy : cadre commercial + global ──
                     if (role === 'admin' && CURRENT_AGENT === 'miizy') {
+                        document.getElementById('nav-standard').style.display = 'none';
+                        document.getElementById('nav-miizy-admin').style.display = 'block';
                         loadMiizyCommerciaux();
                     }
 
@@ -1832,8 +1936,10 @@
                         const badge = document.getElementById('admin-badge');
                         if (badge) badge.style.display = 'block';
                         // Afficher l'item de nav Comptes
-                        const navComptes = document.getElementById('nav-comptes-item');
-                        if (navComptes) navComptes.style.display = 'block';
+                        ['nav-comptes-item','nav-comptes-item-admin'].forEach(id => {
+                            const el = document.getElementById(id);
+                            if (el) el.style.display = 'block';
+                        });
                     }
                 }
             } catch(e) {
@@ -2850,7 +2956,8 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
 
         // ============= CAMPAIGNS =============
         let campSelectedPhones = new Set();
-        let _miizyCommerciaux = [];  // Cache des commerciaux chargés
+        let _miizyCommerciaux = [];       // Cache des commerciaux chargés
+        let _activeCommercial = 'adam';  // Commercial sélectionné dans le cadre admin
 
         async function loadMiizyCommerciaux() {
             try {
@@ -2860,7 +2967,21 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
                 if (!data.success) return;
                 _miizyCommerciaux = data.commerciaux || [];
 
-                // Remplir le sélecteur campagne
+                // Peupler les pills du cadre admin
+                const pillsRow = document.getElementById('miizy-pills-row');
+                if (pillsRow) {
+                    pillsRow.innerHTML = '';
+                    _miizyCommerciaux.forEach(c => {
+                        const btn = document.createElement('button');
+                        btn.className = 'miizy-pill' + (c.id === _activeCommercial ? ' active' : '');
+                        btn.dataset.commercial = c.id;
+                        btn.textContent = c.id === 'adam' ? 'Adam (IA)' : c.name;
+                        btn.onclick = () => selectCommercial(c.id);
+                        pillsRow.appendChild(btn);
+                    });
+                }
+
+                // Remplir le sélecteur campagne (panneau droit)
                 const campSel = document.getElementById('camp-commercial-select');
                 const importSel = document.getElementById('import-commercial-select');
                 [campSel, importSel].forEach(sel => {
@@ -2871,27 +2992,63 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
                     });
                 });
 
-                // Afficher les blocs
+                // Afficher les blocs de sélecteur dans campagne/import
                 const campBlock = document.getElementById('camp-commercial-block');
                 const importBlock = document.getElementById('import-commercial-block');
                 if (campBlock) campBlock.style.display = 'block';
                 if (importBlock) importBlock.style.display = 'block';
+
             } catch(e) {
                 console.warn('loadMiizyCommerciaux error:', e);
             }
         }
 
-        function campOnCommercialChange(commercialId) {
-            const info = document.getElementById('camp-commercial-info');
-            if (!info) return;
-            if (!commercialId) {
-                info.textContent = 'Messages envoyés depuis le numéro Adam (IA)';
-            } else {
-                const c = _miizyCommerciaux.find(x => x.id === commercialId);
-                info.textContent = c ? `Messages envoyés depuis le numéro WhatsApp de ${c.name}` : '';
+        async function selectCommercial(commercialId) {
+            _activeCommercial = commercialId || 'adam';
+
+            // Mettre à jour les pills
+            document.querySelectorAll('.miizy-pill').forEach(pill => {
+                pill.classList.toggle('active', pill.dataset.commercial === _activeCommercial);
+            });
+
+            // Mettre à jour le label du cadre
+            const labelEl = document.getElementById('commercial-frame-label');
+            if (labelEl) {
+                const c = _miizyCommerciaux.find(x => x.id === _activeCommercial);
+                labelEl.textContent = `Espace de ${c ? c.name : 'Adam (IA)'}`;
             }
-            // Recharger les leads filtrés par ce commercial
-            loadLeads(commercialId || null);
+
+            // Synchroniser le sélecteur dans la section campagne
+            const campSel = document.getElementById('camp-commercial-select');
+            if (campSel) campSel.value = _activeCommercial === 'adam' ? '' : _activeCommercial;
+            campOnCommercialChange(_activeCommercial === 'adam' ? '' : _activeCommercial, false);
+
+            // Recharger les leads filtrés
+            await loadLeads(_activeCommercial === 'adam' ? null : _activeCommercial);
+
+            // Rafraîchir la section active si besoin
+            const activeSection = document.querySelector('.section.active');
+            if (activeSection && activeSection.id === 'conversations') {
+                if (typeof loadConversations === 'function') loadConversations();
+            }
+        }
+
+        function campOnCommercialChange(commercialId, reloadLeads = true) {
+            const info = document.getElementById('camp-commercial-info');
+            if (info) {
+                if (!commercialId) {
+                    info.textContent = 'Messages envoyés depuis le numéro Adam (IA)';
+                } else {
+                    const c = _miizyCommerciaux.find(x => x.id === commercialId);
+                    info.textContent = c ? `Messages envoyés depuis le numéro WhatsApp de ${c.name}` : '';
+                }
+            }
+            // Mettre à jour la pill correspondante
+            document.querySelectorAll('.miizy-pill').forEach(pill => {
+                const target = commercialId || 'adam';
+                pill.classList.toggle('active', pill.dataset.commercial === target);
+            });
+            if (reloadLeads) loadLeads(commercialId || null);
         }
 
 
@@ -3188,14 +3345,15 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
             const totalBadge = document.getElementById('conv-total-badge');
             if (totalBadge) totalBadge.textContent = convListData.length;
 
-            // Badge nav
+            // Badge nav (standard + admin Miizy)
             const badge = document.getElementById('nav-conv-count');
-            if (badge) {
+            const badgeAdmin = document.getElementById('nav-conv-count-admin');
+            [badge, badgeAdmin].forEach(b => {
+                if (!b) return;
                 const total = convListData.length;
-                if (total > 0) { badge.textContent = total; badge.style.display = 'inline'; }
-                else badge.style.display = 'none';
-            }
-
+                if (total > 0) { b.textContent = total; b.style.display = 'inline'; }
+                else b.style.display = 'none';
+            });
             // Renommer Daniel → Mohamed sur Miizy
             const humanLabel = document.getElementById('conv-tab-human-label');
             if (humanLabel) humanLabel.textContent = CURRENT_AGENT === 'miizy' ? 'Mohamed' : 'Daniel';
@@ -3608,8 +3766,10 @@ Bernard,Pierre,+33634567890,Marseille,T1,150000€,,2024-03-14,message_a_envoyer
                 const data = await res.json();
                 agendaData = data.rdvs || [];
                 // Badge nav
-                const badge = document.getElementById('nav-rdv-count');
-                if (badge) { badge.textContent = agendaData.length; badge.style.display = agendaData.length ? 'inline' : 'none'; }
+                ['nav-rdv-count','nav-rdv-count-admin'].forEach(id => {
+                    const b = document.getElementById(id);
+                    if (b) { b.textContent = agendaData.length; b.style.display = agendaData.length ? 'inline' : 'none'; }
+                });
                 renderAgendaList();
                 if (agendaView === 'cal') renderCalendar();
             } catch(e) {
