@@ -596,7 +596,7 @@ class MiizyAgent:
 
         t_norm = _normalize(txt)
 
-        # ── "VOUS ÊTES QUI ?" → présentation rapide ─────────────────────────
+        # ── "VOUS ÊTES QUI ?" → présentation en 3 messages ─────────────────
         _QUI = [
             r"\bvous\s+[eê]tes\s+qui\b", r"\bc['']est\s+qui\b",
             r"\bqui\s+[eê]tes[\s-]vous\b", r"\bqui\s+es[\s-]tu\b",
@@ -604,11 +604,17 @@ class MiizyAgent:
             r"\bje\s+(vous|te)\s+connais\s+pas\b",
             r"\bvous\s+[eê]tes\s+de\s+qui\b",
             r"\bc['']est\s+quoi\s+miizy\b",
+            r"\bvous\s+[eê]tes\s*\?",
+            r"\bt['']es\s+qui\b",
         ]
         if any(re.search(p, txt, re.IGNORECASE) for p in _QUI):
-            prenom = self.session.prenom
-            p = f" {prenom}" if prenom else ""
-            reply = f"C'est Alex de Miizy{p} 👋 On avait échangé au sujet de votre activité immobilière."
+            reply = (
+                "Je suis Adam de chez Miizy, un CRM qui donne un accès direct à l'ensemble du stock immobilier neuf en France. "
+                "Concrètement, cela vous permet de capter une part des 15 % de transactions réalisées dans le neuf, "
+                "grâce aux 40 000 lots disponibles immédiatement sur l'outil. "
+                "Est-ce qu'on peut prendre 20 minutes pour que je vous présente la plateforme ? "
+                "Petit bonus : on intègre une version 100 % offerte. 🎁😇"
+            )
             self.session.add_history("assistant", reply)
             return reply, ""
 
