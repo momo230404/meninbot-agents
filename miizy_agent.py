@@ -265,14 +265,20 @@ RÈGLES :
                 parsed = json.loads(m.group())
                 intention = parsed.get("intention", "UNCLEAR").upper()
                 clarification = parsed.get("clarification") or None
-                # Tracker le coût (même pattern que agent_ia_minimal)
                 try:
                     _track_llm_cost(resp.json().get("usage", {}), "miizy_classify")
                 except Exception:
                     pass
                 logger.info(f"[Miizy LLM] step={step} intention={intention}")
                 return {"intention": intention, "clarification": clarification}
-        logger.warning(f"[Miizy LLM] API error {resp.status_code}")
+        err_body = resp.json() if resp.headers.get("content-type","").startswith("application/json") else {}
+        err_msg = err_body.get("error", {}).get("message", "") if isinstance(err_body, dict) else ""
+        if "credit" in err_msg.lower() or "balance" in err_msg.lower():
+            logger.error(f"[Miizy LLM] Crédit Anthropic insuffisant")
+            raise RuntimeError(f"CREDIT_INSUFFISANT: {err_msg[:120]}")
+        logger.warning(f"[Miizy LLM] API error {resp.status_code}: {err_msg[:80]}")
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.warning(f"[Miizy LLM] Exception: {e}")
 
@@ -392,11 +398,23 @@ def _generate_adam_response(
             logger.info(f"[Miizy][Adam] objection={objection_type} reply={reply[:80]}")
             session.add_history("assistant", reply)
             return reply, ""
-        logger.warning(f"[Miizy][Adam] API error {resp.status_code}")
+        err_body = resp.json() if resp.headers.get("content-type","").startswith("application/json") else {}
+        err_msg = err_body.get("error", {}).get("message", "") if isinstance(err_body, dict) else ""
+        if "credit" in err_msg.lower() or "balance" in err_msg.lower():
+            logger.error(f"[Miizy][Adam] Crédit Anthropic insuffisant — {err_msg[:120]}")
+            raise RuntimeError(f"CREDIT_INSUFFISANT: {err_msg[:120]}")
+        logger.warning(f"[Miizy][Adam] API error {resp.status_code}: {err_msg[:80]}")
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.warning(f"[Miizy][Adam] Exception: {e}")
 
-    return "", ""
+    # Fallback de secours : relance douce sans LLM
+    prenom = session.prenom
+    p = f" {prenom}" if prenom else ""
+    fallback = f"Bonne question{p} — je vous réponds dans la journée pour qu'on en discute ensemble. Vous seriez dispo pour un rapide échange cette semaine ?"
+    session.add_history("assistant", fallback)
+    return fallback, ""
 
 
 def _track_llm_cost(usage: dict, label: str):

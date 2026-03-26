@@ -3504,6 +3504,11 @@ def miizy_training_message():
             'extra': extra or '',
             'step': agent.session.step,
         })
+    except RuntimeError as e:
+        if "CREDIT_INSUFFISANT" in str(e):
+            return jsonify({'error': '💳 Crédit Anthropic insuffisant — rechargez votre compte sur console.anthropic.com pour que l\'agent puisse générer des réponses LLM.'}), 402
+        logger.error(f"[miizy_training/message] {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
     except Exception as e:
         logger.error(f"[miizy_training/message] {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
